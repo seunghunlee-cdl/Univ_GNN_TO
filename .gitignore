@@ -1,0 +1,11 @@
+output/
+savefolder/
+wandb/
+*.png
+*.ipynb
+*.pth
+*tmp*
+*temp*
+*cache*
+jitfailure*
+*test*

@@ -33,7 +33,6 @@ def load_from_gmsh(model, N=None):
             file.read(mesh)
             mvc = fe.MeshValueCollection('size_t', mesh, mesh.topology().dim())
             file.read(mvc, 'name_to_read')
-        return mesh
     else:
         numElements = len(model.mesh.getElements(2)[1][0])
         numNodes = len(model.mesh.getNodes()[0])
@@ -65,13 +64,14 @@ def load_from_gmsh(model, N=None):
             file.read(mesh)
             mvc = fe.MeshValueCollection('size_t', mesh, mesh.topology().dim())
             file.read(mvc, 'name_to_read')
-        mf = fe.cpp.mesh.MeshFunctionSizet(mesh,mvc)
+        # mf = fe.cpp.mesh.MeshFunctionSizet(mesh,mvc)
 
-    part_info = dict(
-        nodes=nodes_per_part,
-        elems=elems_per_part
-    )
-    return mesh, mf, part_info
+        part_info = dict(
+            nodes=nodes_per_part,
+            elems=elems_per_part
+        )
+
+    return mesh, part_info
 
 
 def get_clever2d_mesh(L=2, H=1, hmax=0.1, N=None):
@@ -105,7 +105,7 @@ def get_clever2d_mesh(L=2, H=1, hmax=0.1, N=None):
     gmsh.model.mesh.generate(2)
     
     # Convert gmsh to fenics mesh
-    mesh, mf, part_info = load_from_gmsh(gmsh.model, N)
+    mesh, part_info = load_from_gmsh(gmsh.model, N)
     gmsh.finalize()
 
     # Function spaces
@@ -113,8 +113,8 @@ def get_clever2d_mesh(L=2, H=1, hmax=0.1, N=None):
     u = fe.TrialFunction(V)
     du = fe.TestFunction(V)
     F = fe.FunctionSpace(mesh, "CG", 1)
-    e = fe.TrialFunction(F)
-    de = fe.TestFunction(F)
+    rho = fe.TrialFunction(F)
+    drho = fe.TestFunction(F)
 
     # Boundary marker
     boundaries = fe.MeshFunction("size_t", mesh, mesh.topology().dim() - 1)
@@ -134,10 +134,10 @@ def get_clever2d_mesh(L=2, H=1, hmax=0.1, N=None):
             return ((fe.near(x[0], L) and (x[1] >= 0.45*H and x[1] <= 0.55*H)) and on_boundary)
     tracBd = TracBd()
     tracBd.mark(boundaries, 2)
-    t = fe.Constant((0.0, -1.0))
+    t = adj.Constant((0.0, -1.0))
     ds = fe.Measure("ds")(mesh, subdomain_data=boundaries)
 
-    return mesh, V, F, bcs, t, ds, u, du, e, de
+    return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info
     
 
 def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
@@ -167,7 +167,7 @@ def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
     gmsh.model.mesh.generate(2)
     
     # Convert gmsh to fenics mesh
-    mesh, mf, part_info = load_from_gmsh(gmsh.model, N)
+    mesh, part_info = load_from_gmsh(gmsh.model, N)
     gmsh.finalize()
 
     # Function spaces
@@ -175,8 +175,8 @@ def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
     u = fe.TrialFunction(V)
     du = fe.TestFunction(V)
     F = fe.FunctionSpace(mesh, "CG", 1)
-    e = fe.TrialFunction(F)
-    de = fe.TestFunction(F)
+    rho = fe.TrialFunction(F)
+    drho = fe.TestFunction(F)
 
     # Boundary marker
     boundaries = fe.MeshFunction("size_t", mesh, mesh.topology().dim() - 1)
@@ -200,7 +200,13 @@ def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
             return (fe.near(x[1], H) and x[0] <= 0.1*H) and on_boundary
     tracBd = TracBd()
     tracBd.mark(boundaries, 2)
-    t = fe.Constant((0.0, -1.0))
+    t = adj.Constant((0.0, -1.0))
     ds = fe.Measure("ds")(mesh, subdomain_data=boundaries)
 
-    return mesh, V, F, bcs, t, ds, u, du, e, de
+    return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info
+
+
+def get_dof_map(F):
+    v2d = fe.vertex_to_dof_map(F)
+    d2v = fe.dof_to_vertex_map(F)
+    return v2d, d2v

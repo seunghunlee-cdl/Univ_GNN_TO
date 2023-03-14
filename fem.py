@@ -1,7 +1,7 @@
 import fenics as fe
 import fenics_adjoint as adj
+import numpy as np
 from scipy.sparse.linalg import factorized
-
 
 fe.parameters["linear_algebra_backend"] = "Eigen"
 
@@ -36,3 +36,12 @@ def build_weakform_struct(u, du, rhoh, t, ds, subdomain_id=2):
 
 def displacement(u):
     return fe.sqrt(u[0]**2 + u[1]**2)
+
+def input_assemble(uhC, FC, F, v2d, rhoh):
+    eC = epsilon(uhC)
+    e_mapped = np.stack([fe.interpolate(fe.project(eC[i], FC), F).vector()[v2d] for i in range(3)], axis=1)
+    x = np.c_[rhoh.vector()[v2d], e_mapped]
+    return x
+
+def output_assemble(dc,v2d):
+    return dc.vector()[v2d].reshape(-1,1)

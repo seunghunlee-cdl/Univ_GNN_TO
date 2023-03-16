@@ -20,3 +20,8 @@ def map_density(rhoh, rhohC, mesh, meshC, v2d, v2dC):
         meshC.coordinates(),
         rhoh.vector()[v2d])
 
+def compute_theta_error(dc, dc_pred)
+    v1 = dc.vector()[:]
+    v2 = dc_pred.vector()[:]
+    therr = np.arccos(np.dot(v1, v2)/np.linalg.norm(v1)/np.linalg.norm(v2))*180/np.pi
+    return therr

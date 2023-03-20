@@ -310,7 +310,7 @@ def get_wrench2d_mesh(L: float = 2, R1: float = 0.5, R2: float = 0.3, r1: float 
     #### Dirichlet boundary
     class DirBd(fe.SubDomain):
         def inside(self, x, on_boundary):
-            return (((x[0]-0)**2)+((x[1]-0)**2)) <= 0.3**2
+            return (x[0]**2 + x[1]**2 <= (r1 + 1e-9)**2) and on_boundary
     dirBd = DirBd()
     dirBd.mark(boundaries,1)
     bcs = [adj.DirichletBC(V, (0.0,0.0), dirBd)]
@@ -318,7 +318,7 @@ def get_wrench2d_mesh(L: float = 2, R1: float = 0.5, R2: float = 0.3, r1: float 
     ##### Traction boundary
     class TracBd(fe.SubDomain):
         def inside(self, x, on_boundary):
-            return ((x[0]>=1.82) and (x[0]<=2.18) and (x[1]<=0) and (x[1]>=-0.18))
+            return (((x[0] - L)**2 + x[1]**2 <= (r2 + 1e-9)**2) and x[1] <= 0) and on_boundary
     tracBd = TracBd()
     tracBd.mark(boundaries,2)
 
@@ -326,7 +326,6 @@ def get_wrench2d_mesh(L: float = 2, R1: float = 0.5, R2: float = 0.3, r1: float 
     ds = fe.Measure("ds")(mesh, subdomain_data=boundaries)
     return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info
 
-# def michell2d(L: float = 2, H: float = 1.5, R: float = 0.5, alpha: float = 0.1, hmax: float = 0.1, N: Optional[int] = None):
 def halfcircle2d(R= 1, alpha= 0.1, hmax= 0.1, N= None):
     gmsh.initialize()
     gmsh.option.setNumber("General.Verbosity", 0)
@@ -402,11 +401,14 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     from matplotlib.tri import Triangulation
 
-    mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info = get_wrench2d_mesh(hmax=0.01, N=20)
+    mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info = get_wrench2d_mesh(hmax=0.08, N=20)
 
     for n, e in zip(part_info['nodes'], part_info['elems']):
         T = Triangulation(*mesh.coordinates().T, triangles=mesh.cells()[e])
         plt.triplot(T)
+    count = np.zeros((len(mesh.coordinates()), 1))  ### num of patches overlab by node
+    for pn in part_info['nodes']:
+        count[pn] += 1
     plt.axis('image')
     plt.show()
     pass

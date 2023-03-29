@@ -45,7 +45,7 @@ class MyGNN(torch.nn.Module):
         super().__init__()
         
         self.input = pyg.nn.GCNConv(n_input, n_hidden)
-        self.input_act = torch.nn.PReLU()
+        self.input_act = torch.nn.ReLU()
 
         self.dropout = torch.nn.ModuleList()
         self.hidden = torch.nn.ModuleList()
@@ -53,11 +53,10 @@ class MyGNN(torch.nn.Module):
         for _ in range(n_layer):
             self.hidden.append(pyg.nn.GCNConv(n_hidden, n_hidden))
             self.dropout.append(torch.nn.Dropout(p=dropout))
-            self.hidden_act.append(torch.nn.PReLU())
+            self.hidden_act.append(torch.nn.ReLU())
         self.output = pyg.nn.GCNConv(n_hidden, 1)
         
     def forward(self, x, edge_index):
-        # x = self.norm(x)
         x = self.input_act(self.input(x, edge_index))
         for layer, drop, act in zip(self.hidden, self.dropout, self.hidden_act):
             x = layer(x, edge_index) + x
@@ -74,9 +73,14 @@ def training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net=Non
     train_loader = pyg.loader.DataLoader(train_dataset, batch_size = batch_size)
     validation_loader = pyg.loader.DataLoader(validataion_dataset, batch_size = batch_size)
     if net is None:
-        net = MyGNN(4, n_hidden, n_layer, 0.2).to(device)
+        net = MyGNN(5, n_hidden, n_layer, 0.5).to(device)
     optim = torch.optim.Adam(net.parameters(), lr=lr)
-    criterion = torch.nn.MSELoss()
+    # criterion = torch.nn.MSELoss()
+    criterion = torch.nn.L1Loss()
+    # def criterion(yhat, y):
+    #     umag = torch.norm(yhat[:, 0])
+    #     vmag = torch.norm(y[:, 0])
+    #     return 1 - torch.sum(yhat*y)/umag/vmag
     train_history = []
     val_history = []
     pbar = tqdm(range(epochs))

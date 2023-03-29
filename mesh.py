@@ -60,74 +60,6 @@ def generate_fenics_mesh(N=None):
 
     return mesh, part_info
 
-
-def load_from_gmsh(model, N=None):
-    ndim = model.getDimension()
-    # Get node coordinates
-    idx, x, _ = model.mesh.getNodes()
-    x = x.reshape(-1, 3)[:, :ndim]
-
-    # Get elements
-    _, elems_raw, cells = map(lambda x: x[0], model.mesh.getElements(dim=2))
-    cells = cells.reshape(-1, 3) - 1
-    num_cells = len(cells)
-    cell_data = np.zeros(num_cells, dtype=int)
-
-    part_info = None
-    if N is None:
-        mesh_out = meshio.Mesh(
-            points=x,
-            cells={'triangle': cells},
-            cell_data={'name_to_read': [cell_data]}
-        )
-        meshio.write(TEMP_MESH_PATH, mesh_out)
-
-        mesh = adj.Mesh()    
-        with fe.XDMFFile(TEMP_MESH_PATH) as file:
-            file.read(mesh)
-            mvc = fe.MeshValueCollection('size_t', mesh, mesh.topology().dim())
-            file.read(mvc, 'name_to_read')
-    else:
-        numElements = len(model.mesh.getElements(2)[1][0])
-        numNodes = len(model.mesh.getNodes()[0])
-        numPartitions = numNodes // N
-        model.mesh.partition(numPartitions)
-
-        num_parts = model.getNumberOfPartitions()
-        elems_per_part = [[] for _ in range(num_parts)]  ###elem num
-        entities = model.getEntities(2)
-        for dim, tag in entities:
-            part_id = model.getPartitions(dim, tag)
-            if part_id:
-                elem_id = model.mesh.getElements(dim, tag)[1][0]
-                _, comm, _ = np.intersect1d(elems_raw, elem_id, return_indices = True)
-                elems_per_part[part_id[0]-1] = comm
-        nodes_per_part = []
-        for part_id, part in enumerate(elems_per_part):
-            cell_data[part] = part_id
-            nodes_per_part.append(np.unique(cells[part]))
-        mesh_out = meshio.Mesh(
-            points = x,
-            cells = {'triangle' : cells},
-            cell_data = {'name_to_read': [cell_data]}
-        )
-        meshio.write(TEMP_MESH_PATH, mesh_out)
-
-        mesh = adj.Mesh()
-        with fe.XDMFFile(TEMP_MESH_PATH) as file:
-            file.read(mesh)
-            mvc = fe.MeshValueCollection('size_t', mesh, mesh.topology().dim())
-            file.read(mvc, 'name_to_read')
-        # mf = fe.cpp.mesh.MeshFunctionSizet(mesh,mvc)
-
-        part_info = dict(
-            nodes=nodes_per_part,
-            elems=elems_per_part
-        )
-
-    return mesh, part_info
-
-
 def get_clever2d_mesh(L=2, H=1, hmax=0.1, N=None):
     # Initialize
     gmsh.initialize()
@@ -217,7 +149,8 @@ def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
     gmsh.model.mesh.generate(2)
     
     # Convert gmsh to fenics mesh
-    mesh, part_info = load_from_gmsh(gmsh.model, N)
+    mesh, part_info = generate_fenics_mesh(N)
+
     gmsh.finalize()
 
     # Function spaces
@@ -234,19 +167,22 @@ def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
     # Dirichlet boundary
     class DirBdSym(fe.SubDomain):
         def inside(self, x, on_boundary):
-            return (fe.near(x[0], 0.0) and on_boundary)
+            # return (fe.near(x[0], 0.0) and on_boundary)
+            return fe.near(x[0], 0.0)
     class DirBdSupp(fe.SubDomain):
         def inside(self, x, on_boundary):
-            return (fe.near(x[1], 0.0) and x[0] >= L - 0.03*H) and on_boundary
+            # return (fe.near(x[1], 0.0) and x[0] >= L - 0.05*H) and on_boundary
+            return abs(x[0]-L) < 1e-14 and abs(x[1]) < 1e-14
     dirBdSym, dirBdSupp = [DirBdSym(),DirBdSupp()]
     # dirBdSupp = DirBdSupp()
     dirBdSym.mark(boundaries, 1)
-    dirBdSupp.mark(boundaries, 1)
-    bcs = [adj.DirichletBC(V.sub(0), 0.0, dirBdSym), adj.DirichletBC(V.sub(1), 0.0, dirBdSupp)]
+    dirBdSupp.mark(boundaries, 2)
+    # bcs = [adj.DirichletBC(V.sub(0), 0.0, dirBdSym), adj.DirichletBC(V.sub(1), 0.0, dirBdSupp)]
+    bcs = [adj.DirichletBC(V.sub(0), 0.0, dirBdSym), adj.DirichletBC(V.sub(1), 0.0, dirBdSupp,method = 'pointwise')]
     # Traction boundary
     class TracBd(fe.SubDomain):
         def inside(self, x, on_boundary):
-            return (fe.near(x[1], H) and x[0] <= 0.05*H)
+            return (fe.near(x[1], H) and x[0] <= 0.05)
     tracBd = TracBd()
     tracBd.mark(boundaries, 2)
     t = adj.Constant((0.0, -1.0))
@@ -356,7 +292,7 @@ def halfcircle2d(R= 1, alpha= 0.1, hmax= 0.1, N= None):
     gmsh.model.geo.synchronize()
     gmsh.model.mesh.generate(2)
 
-    mesh, part_info = load_from_gmsh(gmsh.model, N)
+    mesh, part_info = generate_fenics_mesh(N)
     gmsh.finalize()
 
     # Function spaces
@@ -401,7 +337,7 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     from matplotlib.tri import Triangulation
 
-    mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info = get_wrench2d_mesh(hmax=0.08, N=20)
+    mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info = get_mbb2d_mesh(hmax=0.02, N=4)
 
     for n, e in zip(part_info['nodes'], part_info['elems']):
         T = Triangulation(*mesh.coordinates().T, triangles=mesh.cells()[e])

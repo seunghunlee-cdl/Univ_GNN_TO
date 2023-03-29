@@ -60,29 +60,25 @@ def input_assemble(rhoh, uhC, V, F, FC, v2d, v2dC, count, loop, scaler=None):
     if scaler is None:
         scaler = MinMaxScaler(feature_range=(-1,1))
         scaler.fit(e_mapped)
+
     e_mapped = scaler.transform(e_mapped)
-    x = np.c_[rhoh.vector()[v2d], e_mapped]
+    x = np.c_[rhoh.vector()[v2d], e_mapped, count]
+    # x /= count
+    # x = np.c_[x, count]
     return x, scaler
 
 
-def output_assemble(dc,v2d,loop):
-    box = dc.vector()[:]
-    if loop == 0:
-        global scalers
+def output_assemble(dc, v2d, loop, scalers = None,  lb = None, k = 5):
+    box = dc.vector()[:].copy()
+    if lb is None:
+        q1, q3 = np.percentile(box, [25, 75])
+        iqr = q3 - q1
+        lb = q1 - k*iqr
+    box[box < lb] = box[box >= lb].min()
+    if scalers is None:
         scalers = MinMaxScaler(feature_range=(-1,0))
         scalers.fit(box.reshape(-1,1))
     box = scalers.transform(box.reshape(-1,1))
     dc.vector()[:] = box.ravel()
-    return dc.vector()[v2d].reshape(-1,1)
+    return dc.vector()[v2d].reshape(-1,1), scalers, lb
 
-
-def oc(density,volfrac,dc,dv,mesh):
-    l1 = 0
-    l2 = 1e16
-    move = 0.2
-    # reshape to perform vector operations
-    while (l2-l1)/(l1+l2)>1e-4:
-        lmid = 0.5*(l2+l1)
-        density_new = np.maximum(0.0,np.maximum(density.vector()[:]-move,np.minimum(1.0,np.minimum(density.vector()[:]+move,density.vector()[:]*np.sqrt(-dc/dv.vector()[:]/lmid)))))
-        l1, l2 = (lmid, l2) if (sum(density_new) - volfrac * mesh.num_entities(0))>0 else (l1, lmid)
-    return density_new

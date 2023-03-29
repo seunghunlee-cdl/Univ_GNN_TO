@@ -1,4 +1,5 @@
 import os
+import random
 import shutil
 from time import time
 
@@ -28,13 +29,23 @@ SAVE_DIR = XDMFFile("output/result.xdmf")
 os.mkdir("/workspace/output")
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-def main(volfrac, maxiter, N, xsolv, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr):
+def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr):
     t_start = time()
     ## time
-    t_filter=t_input=t_fine=t_coarse=t_dcdv=t_training=t_pred=t_optimizer=input_apd=output_apd=[]
+    t_filter = []
+    t_input  = []
+    t_fine   = []
+    t_coarse = []
+    t_append = []
+    t_dcdv   = []
+    t_training=[]
+    t_pred=[]
+    t_optimizer=[]
+    input_apd=[]
+    output_apd=[]
 
-    mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info = get_wrench2d_mesh(hmax=hmax, N=N)
-    meshC, VC, FC, bcsC, tC, dsC, uC, duC, _, _, _ = get_wrench2d_mesh(hmax = hmaxC)
+    mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info = get_mbb2d_mesh(hmax=hmax, N=N)
+    meshC, VC, FC, bcsC, tC, dsC, uC, duC, _, _, _ = get_mbb2d_mesh(hmax = hmaxC)
 
     print("fine :", mesh.num_entities(0),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
 
@@ -82,38 +93,37 @@ def main(volfrac, maxiter, N, xsolv, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_si
     loop = 0
     while loop < maxiter:
         tic = time()
-        solve(aH == LH, rhoh, solver_parameters={'linear_solver': 'umfpack'}) ## density Filtering
+        solve(aH == LH, rhoh) ## density Filtering
         t_filter.append(time()-tic)
 
         tic = time()
         map_density(rhoh, rhohC, mesh, meshC, v2d, v2dC)
-        solve(aC == LC, uhC, bcs=bcsC, solver_parameters={'linear_solver': 'umfpack'})
+        solve(aC == LC, uhC, bcs=bcsC)  ##  Coarse FE
         t_coarse.append(time()-tic)
 
         tic = time()
         x, scaler = input_assemble(rhoh, uhC, V, F, FC, v2d, v2dC, count, loop, scaler if loop > 0 else None)
-        x /= count
+        # x /= count
+
         t_input.append(time()-tic)
         x_last = x  
-
-        tic = time()
-        solve(a == L, uh, bcs=bcs, solver_parameters={'linear_solver': 'umfpack'})  ## fine
-        t_fine.append(time()-tic)
-
-        ## objective, constraint
-        Ws = inner(sigma(uh,rhoh), epsilon(uh))
-        comp = assemble(Ws*dx)
-        vol = assemble(rhoh*dx)
-        tic = time()
-        dc = compute_gradient(comp, m)   ### fine sensitivity
-        dv = compute_gradient(vol, m)
-        t_dcdv.append(time()-tic)
+        input_apd.append(x)
+                
         if(loop<Ni+Wi) or (divmod(max(loop-Ni-Wi,1),Nf)[1]==0):
-
+            tic = time()
+            solve(a == L, uh, bcs=bcs)  ## fine
+            t_fine.append(time()-tic)
+            Ws = inner(sigma(uh,rhoh), epsilon(uh))
+            comp = assemble(Ws*dx)
+            vol = assemble(rhoh*dx)
+            tic = time()
+            dc = compute_gradient(comp, m)   ### fine sensitivity
+            dv = compute_gradient(vol, m)
+            t_dcdv.append(time()-tic)
             ## Store
-            y = output_assemble(dc, v2d, loop)/count
-            
-            input_apd.append(x)
+            y, scalers, lb = output_assemble(dc, v2d, loop, scalers if loop > 0 else None, lb if loop > 0 else None)
+            # y /= count
+
             output_apd.append(y)
 
             if loop == Ni + Wi -1:
@@ -122,6 +132,8 @@ def main(volfrac, maxiter, N, xsolv, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_si
                 for i in range(Wi):
                     data_list.append([generate_data(input_apd[-(i+1)], output_apd[-(i+1)], node_ids, cell_ids,mesh) for node_ids, cell_ids in zip(part_info['nodes'], part_info['elems'])])
                 dataset = sum(data_list,[])
+                t_append.append(time()-tic)
+                tic = time()
                 train_hist, val_hist, net  = training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device)
                 t_training.append(time()-tic)
             elif divmod(max(loop-Ni-Wi,1), Nf)[1] == 0:
@@ -130,6 +142,8 @@ def main(volfrac, maxiter, N, xsolv, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_si
                 for i in range(Wu):
                     data_list.append([generate_data(input_apd[-(i+1)], output_apd[-(i+1)], node_ids, cell_ids,mesh) for node_ids, cell_ids in zip(part_info['nodes'], part_info['elems'])])
                 dataset = sum(data_list,[])
+                t_append.append(time()-tic)
+                tic = time()
                 train_hist, val_hist, net = training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net)
                 t_training.append(time()-tic)
 
@@ -152,12 +166,18 @@ def main(volfrac, maxiter, N, xsolv, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_si
         else:
             tic = time()
             pred_input_data = [pred_input(x_last, node_ids, cell_ids, mesh) for node_ids, cell_ids in zip(part_info['nodes'], part_info['elems'])]
-            pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = batch_size)
+            pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = len(pred_input_data))
             with torch.no_grad():
+                net.eval()
                 for batch in pred_loader:
                     yhat = net(batch.x.to(device), batch.edge_index.to(device)).cpu()
-                    dc_pred.vector()[v2d[batch.global_idx]] += yhat.numpy()[:,0]
- 
+                    # dc_pred.vector()[v2d[batch.global_idx]] = scalers.inverse_transform(
+                    #     yhat.numpy()
+                    # )[:,0]
+                    for i in range(len(batch)):
+                        dc_pred.vector()[v2d[batch[i].global_idx]] += \
+                            yhat.numpy()[batch.batch==i, 0]
+            dc_pred.vector()[v2d] = scalers.inverse_transform(dc_pred.vector()[v2d].reshape(-1,1)).ravel()/count.ravel()
             t_pred.append(time()-tic)
 
             # therr = compute_theta_error(dc,dc_pred)    ###### theta_error
@@ -183,19 +203,24 @@ def main(volfrac, maxiter, N, xsolv, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_si
             xold1 = xval.copy()
             phih.vector()[:] = xmma.ravel()
             t_optimizer.append(time()-tic)
+
         plot(rhoh, cmap="gray_r")
         plt.savefig("test.png")
         loop += 1
         print(f"it.: {loop}", f",obj.: {comp}")
+        
     SAVE_DIR.write(rhoh)
-    plot(rhoh, cmap = "bone_r")
+    plot(rhoh, cmap = "gray_r")
+    # plot(dc)
+    # plt.colorbar(plot(dc))
     plt.savefig("test.png")
     print("total time :", time()-t_start)
     print("filter time :", sum(t_filter))
     print("input time :", sum(t_input))
     print("fine time :", sum(t_fine))
     print("coarse time :", sum(t_coarse))
-    print("adj time :", sum(t_dcdv))
+    print("sens time :", sum(t_dcdv))
+    print("append time :", sum(t_append))
     print("training time :", sum(t_training))
     print("pred time :", sum(t_pred))
     print("optimizer time :", sum(t_optimizer))
@@ -205,18 +230,20 @@ if __name__ == "__main__":
     ## parameters
     volfrac = 0.5
     maxiter = 100
-    N = 10    ## number of node in patch
-    xsolv = 1 
-    hmax = 0.03
-    hmaxC = 0.06
+    N = 514    ## number of node in patch
+    hmax = 0.015
+    hmaxC = 0.03
     rmin = hmax
     Ni = 10
     Nf = 10
     Wi = 10
     Wu = 5
-    batch_size = 1024
-    epochs = 16
-    n_hidden = 1024
-    n_layer = 1
-    lr = 0.001
-    main(volfrac, maxiter, N, xsolv, hmax, hmaxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr)
+    batch_size = 32
+    epochs = 5
+    n_hidden = 512
+    n_layer = 5
+    lr = 0.005
+    torch.manual_seed(42)
+    random.seed(42)
+    np.random.seed(42)
+    main(volfrac, maxiter, N, hmax, hmaxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr)

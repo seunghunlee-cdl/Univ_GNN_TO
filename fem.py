@@ -41,7 +41,7 @@ def displacement(u):
     return fe.sqrt(u[0]**2 + u[1]**2)
 
 
-def input_assemble(rhoh, uhC, V, F, FC, v2d, v2dC, count, loop, scaler=None):
+def input_assemble(rhoh, uhC, V, F, FC, v2dC,  loop, scaler=None):
     eC = epsilon(uhC)
     e_mapped = np.zeros((len(F.mesh().coordinates()), 3))
     for i in range(3):
@@ -50,19 +50,12 @@ def input_assemble(rhoh, uhC, V, F, FC, v2d, v2dC, count, loop, scaler=None):
             F.mesh().coordinates(),
             adj.project(eC[i], FC).vector()[v2dC]
         )
-    # u_mapped = np.zeros((len(F.mesh().coordinates()), 2))
-    # for i in range(2):
-    #     u_mapped[:, i] = map_mesh(
-    #         FC.mesh().coordinates(),
-    #         F.mesh().coordinates(),
-    #         adj.project(uhC[i], FC).vector()[v2dC]
-    #     )
     if scaler is None:
         scaler = MinMaxScaler(feature_range=(-1,1))
         scaler.fit(e_mapped)
 
     e_mapped = scaler.transform(e_mapped)
-    x = np.c_[rhoh.vector()[v2d], e_mapped, count]
+    x = np.c_[rhoh.vector(), e_mapped]
     # x /= count
     # x = np.c_[x, count]
     return x, scaler

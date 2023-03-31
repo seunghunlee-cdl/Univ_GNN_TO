@@ -73,7 +73,7 @@ def training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net=Non
     train_loader = pyg.loader.DataLoader(train_dataset, batch_size = batch_size)
     validation_loader = pyg.loader.DataLoader(validataion_dataset, batch_size = batch_size)
     if net is None:
-        net = MyGNN(5, n_hidden, n_layer, 0.5).to(device)
+        net = MyGNN(4, n_hidden, n_layer, 0.5).to(device)
     optim = torch.optim.Adam(net.parameters(), lr=lr)
     # criterion = torch.nn.MSELoss()
     criterion = torch.nn.L1Loss()

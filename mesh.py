@@ -154,10 +154,16 @@ def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
     gmsh.finalize()
 
     # Function spaces
-    V = fe.VectorFunctionSpace(mesh, "CG", 1)
+    if N:
+        V = fe.VectorFunctionSpace(mesh,"DG", 0)
+        F = fe.FunctionSpace(mesh,"DG", 0)
+    else:
+        V = fe.VectorFunctionSpace(mesh, "CG", 1)
+        F = fe.FunctionSpace(mesh, "CG", 1)
+
     u = fe.TrialFunction(V)
     du = fe.TestFunction(V)
-    F = fe.FunctionSpace(mesh, "CG", 1)
+    
     rho = fe.TrialFunction(F)
     drho = fe.TestFunction(F)
 

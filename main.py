@@ -47,14 +47,14 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
     mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info = get_mbb2d_mesh(hmax=hmax, N=N)
     meshC, VC, FC, bcsC, tC, dsC, uC, duC, _, _, _ = get_mbb2d_mesh(hmax = hmaxC)
 
-    print("fine :", mesh.num_entities(0),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
+    print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
 
-    v2d, d2v = get_dof_map(F)
+    # v2d, d2v = get_dof_map(F)
     v2dC, d2vC = get_dof_map(FC)
 
-    count = np.zeros((len(mesh.coordinates()), 1))  ### num of patches overlab by node
-    for pn in part_info['nodes']:
-        count[pn] += 1
+    # count = np.zeros((len(mesh.coordinates()), 1))  ### num of patches overlab by node
+    # for pn in part_info['nodes']:
+        # count[pn] += 1
         
     uh = Function(V)
     phih = Function(F)   ## density
@@ -66,7 +66,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
 
     ## MMA parameters
     mm = 1
-    n = mesh.num_entities(0)
+    n = mesh.num_cells()
     xmin = np.zeros((n,1))
     xmax = np.ones((n,1))
     xval = phih.vector()[:][np.newaxis].T
@@ -97,12 +97,13 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
         t_filter.append(time()-tic)
 
         tic = time()
-        map_density(rhoh, rhohC, mesh, meshC, v2d, v2dC)
+        # map_density(rhoh, rhohC, mesh, meshC, v2d, v2dC)
+        rhohC = project(rhoh,FC)
         solve(aC == LC, uhC, bcs=bcsC)  ##  Coarse FE
         t_coarse.append(time()-tic)
 
         tic = time()
-        x, scaler = input_assemble(rhoh, uhC, V, F, FC, v2d, v2dC, count, loop, scaler if loop > 0 else None)
+        x, scaler = input_assemble(rhoh, uhC, V, F, FC, v2dC, loop, scaler if loop > 0 else None)
         # x /= count
 
         t_input.append(time()-tic)
@@ -231,7 +232,7 @@ if __name__ == "__main__":
     volfrac = 0.5
     maxiter = 100
     N = 514    ## number of node in patch
-    hmax = 0.015
+    hmax = 0.02
     hmaxC = 0.03
     rmin = hmax
     Ni = 10

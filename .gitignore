@@ -10,3 +10,4 @@ wandb/
 jitfailure*
 *test*
 *.msh
+.vscode

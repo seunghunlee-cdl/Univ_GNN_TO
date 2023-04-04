@@ -9,35 +9,35 @@ from tqdm.auto import tqdm
 
 def generate_data(x, y, node_ids, cell_ids, mesh):
     coords = mesh.coordinates()
-    num_nodes = len(coords)
+    num_elems = mesh.num_cells()
     cells = mesh.cells()
 
-    tmp = np.arange(num_nodes)
-    tmp[node_ids] = np.arange(len(node_ids))
-    x_by_part = torch.tensor(x[node_ids], dtype = torch.float)
-    y_by_part = torch.tensor(y[node_ids], dtype = torch.float)
-    cell_by_part = tmp[cells[cell_ids]]
+    # tmp = np.arange(num_elems)
+    # tmp[cell_ids] = np.arange(len(cell_ids))
+    x_by_part = torch.tensor(x[cell_ids], dtype = torch.float)
+    y_by_part = torch.tensor(y[cell_ids], dtype = torch.float)
+    cell_by_part = cells[cell_ids]
 
-    T = Triangulation(*coords[node_ids].T, triangles=cell_by_part)
+    T = Triangulation(*coords.T, triangles=cell_by_part)
     src, dst = T.edges.T
     edge_index = torch.tensor(np.c_[np.r_[src, dst], np.r_[dst, src]].T, dtype=torch.long)
 
-    return pyg.data.Data(x=x_by_part, y=y_by_part, edge_index=edge_index, global_idx=torch.tensor(node_ids.astype(int), dtype=torch.long))
+    return pyg.data.Data(x=x_by_part, y=y_by_part, edge_index=edge_index, global_idx=torch.tensor(cell_ids.astype(int), dtype=torch.long))
 
 def pred_input(x, node_ids, cell_ids, mesh):
     coords = mesh.coordinates()
-    num_nodes = len(coords)
+    num_elems = mesh.num_cells()
     cells = mesh.cells()
 
-    tmp = np.arange(num_nodes)
-    tmp[node_ids] = np.arange(len(node_ids))
-    x_by_part = torch.tensor(x[node_ids], dtype = torch.float)
-    cell_by_part = tmp[cells[cell_ids]]
-    T = Triangulation(*coords[node_ids].T, triangles=cell_by_part)
+    # tmp = np.arange(num_nodes)
+    # tmp[node_ids] = np.arange(len(node_ids))
+    x_by_part = torch.tensor(x[cell_ids], dtype = torch.float)
+    cell_by_part = cells[cell_ids]
+    T = Triangulation(*coords.T, triangles=cell_by_part)
     src, dst = T.edges.T
     edge_index = torch.tensor(np.c_[np.r_[src, dst], np.r_[dst, src]].T, dtype=torch.long)
 
-    return pyg.data.Data(x=x_by_part, edge_index=edge_index, global_idx=torch.tensor(node_ids.astype(int), dtype=torch.long))
+    return pyg.data.Data(x=x_by_part, edge_index=edge_index, global_idx=torch.tensor(cell_ids.astype(int), dtype=torch.long))
 
 
 class MyGNN(torch.nn.Module):
@@ -67,11 +67,11 @@ class MyGNN(torch.nn.Module):
 def training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net=None):
     dataset_size = len(dataset)
     train_size = int(dataset_size*0.8)
-    validataion_size = int(dataset_size-train_size)
-    train_dataset, validataion_dataset = random_split(dataset, [train_size, validataion_size])
+    validation_size = int(dataset_size-train_size)
+    train_dataset, validation_dataset = random_split(dataset, [train_size, validation_size])
 
     train_loader = pyg.loader.DataLoader(train_dataset, batch_size = batch_size)
-    validation_loader = pyg.loader.DataLoader(validataion_dataset, batch_size = batch_size)
+    validation_loader = pyg.loader.DataLoader(validation_dataset, batch_size = batch_size)
     if net is None:
         net = MyGNN(4, n_hidden, n_layer, 0.5).to(device)
     optim = torch.optim.Adam(net.parameters(), lr=lr)

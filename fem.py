@@ -41,27 +41,33 @@ def displacement(u):
     return fe.sqrt(u[0]**2 + u[1]**2)
 
 
-def input_assemble(rhoh, uhC, V, F, FC, v2dC,  loop, scaler=None):
-    eC = epsilon(uhC)
-    e_mapped = np.zeros((len(F.mesh().coordinates()), 3))
+def input_assemble(rhoh, uhC, V, F, FC, v2dC, loop, center, scaler=None):
+    # eC = epsilon(uhC)
+    uhbar = adj.interpolate(uhC,V)
+    strain = epsilon(uhbar)
+
+    e_mapped = np.zeros((F.mesh().num_cells(), 3))
+    # for i in range(3):
+    #     e_mapped[:, i] = map_mesh(
+    #         FC.mesh().coordinates(),
+    #         F.mesh().coordinates(),
+    #         adj.project(eC[i], FC).vector()[v2dC]
+    #     )
     for i in range(3):
-        e_mapped[:, i] = map_mesh(
-            FC.mesh().coordinates(),
-            F.mesh().coordinates(),
-            adj.project(eC[i], FC).vector()[v2dC]
-        )
+        e_mapped[:,i]=adj.project(strain[i],F).vector()[:]
+
     if scaler is None:
         scaler = MinMaxScaler(feature_range=(-1,1))
         scaler.fit(e_mapped)
 
     e_mapped = scaler.transform(e_mapped)
-    x = np.c_[rhoh.vector(), e_mapped]
+    x = np.c_[rhoh.vector()[:], e_mapped]
     # x /= count
     # x = np.c_[x, count]
     return x, scaler
 
 
-def output_assemble(dc, v2d, loop, scalers = None,  lb = None, k = 5):
+def output_assemble(dc, loop, scalers = None,  lb = None, k = 5):
     box = dc.vector()[:].copy()
     if lb is None:
         q1, q3 = np.percentile(box, [25, 75])
@@ -73,5 +79,6 @@ def output_assemble(dc, v2d, loop, scalers = None,  lb = None, k = 5):
         scalers.fit(box.reshape(-1,1))
     box = scalers.transform(box.reshape(-1,1))
     dc.vector()[:] = box.ravel()
-    return dc.vector()[v2d].reshape(-1,1), scalers, lb
+    # return dc.vector()[v2d].reshape(-1,1), scalers, lb
+    return dc.vector()[:].reshape(-1,1), scalers, lb
 

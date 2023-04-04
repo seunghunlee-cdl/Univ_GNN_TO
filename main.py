@@ -12,7 +12,9 @@ from fenics import (XDMFFile, as_backend_type, dx, grad, inner, parameters,
                     plot, set_log_active)
 from fenics_adjoint import (Constant, Control, Function, assemble,
                             compute_gradient, interpolate, project, solve)
+from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import factorized
+from scipy.spatial.distance import pdist, squareform
 
 from fem import (build_weakform_filter, build_weakform_struct, epsilon,
                  input_assemble, output_assemble, sigma)
@@ -20,14 +22,16 @@ from mesh import (get_clever2d_mesh, get_dof_map, get_mbb2d_mesh,
                   get_wrench2d_mesh, halfcircle2d)
 from MMA import mmasub, subsolv
 from model import MyGNN, generate_data, pred_input, training
-from utils import compute_theta_error, map_density
+from utils import (calculate_center, compute_theta_error,
+                   generate_density_graph, map_density)
 
 set_log_active(False)
 if os.path.exists("/workspace/output"):
     shutil.rmtree("/workspace/output")
 SAVE_DIR = XDMFFile("output/result.xdmf")
 os.mkdir("/workspace/output")
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = 'cpu'
 
 def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr):
     t_start = time()
@@ -51,11 +55,19 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
 
     # v2d, d2v = get_dof_map(F)
     v2dC, d2vC = get_dof_map(FC)
+    
+    
+    center = calculate_center(mesh)
+
+    H = csr_matrix(np.maximum(0, rmin - squareform(pdist(center))))
+    hs = H@np.ones(mesh.num_cells())
 
     # count = np.zeros((len(mesh.coordinates()), 1))  ### num of patches overlab by node
     # for pn in part_info['nodes']:
         # count[pn] += 1
-        
+
+    graph_edge, graph_coords = generate_density_graph(mesh)
+
     uh = Function(V)
     phih = Function(F)   ## density
     m = Control(phih)
@@ -93,7 +105,9 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
     loop = 0
     while loop < maxiter:
         tic = time()
-        solve(aH == LH, rhoh) ## density Filtering
+        # solve(aH == LH, rhoh) ## density Filtering
+        rhoh.assign(phih)
+        rhoh.vector()[:] = (H@rhoh.vector()[:])/hs
         t_filter.append(time()-tic)
 
         tic = time()
@@ -103,7 +117,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
         t_coarse.append(time()-tic)
 
         tic = time()
-        x, scaler = input_assemble(rhoh, uhC, V, F, FC, v2dC, loop, scaler if loop > 0 else None)
+        x, scaler = input_assemble(rhoh, uhC, V, F, FC, v2dC, loop, center, scaler if loop > 0 else None)
         # x /= count
 
         t_input.append(time()-tic)
@@ -120,9 +134,13 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
             tic = time()
             dc = compute_gradient(comp, m)   ### fine sensitivity
             dv = compute_gradient(vol, m)
+
+            dc.vector()[:] = (H@dc.vector()[:])/hs
+            dv.vector()[:] = (H@dv.vector()[:])/hs
+
             t_dcdv.append(time()-tic)
             ## Store
-            y, scalers, lb = output_assemble(dc, v2d, loop, scalers if loop > 0 else None, lb if loop > 0 else None)
+            y, scalers, lb = output_assemble(dc, loop, scalers if loop > 0 else None, lb if loop > 0 else None)
             # y /= count
 
             output_apd.append(y)
@@ -175,10 +193,15 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
                     # dc_pred.vector()[v2d[batch.global_idx]] = scalers.inverse_transform(
                     #     yhat.numpy()
                     # )[:,0]
+
                     for i in range(len(batch)):
-                        dc_pred.vector()[v2d[batch[i].global_idx]] += \
+                        # dc_pred.vector()[v2d[batch[i]].global_idx] += \
+                            # yhat.numpy()[batch.batch==i, 0]
+                        pass
+                        dc_pred.vector()[batch[i].global_idx] += \
                             yhat.numpy()[batch.batch==i, 0]
-            dc_pred.vector()[v2d] = scalers.inverse_transform(dc_pred.vector()[v2d].reshape(-1,1)).ravel()/count.ravel()
+            # dc_pred.vector()[v2d] = scalers.inverse_transform(dc_pred.vector()[v2d].reshape(-1,1)).ravel()/count.ravel()
+            dc_pred.vector()[:] = scalers.inverse_transform(dc_pred.vector()[:].reshape(-1,1)).ravel()
             t_pred.append(time()-tic)
 
             # therr = compute_theta_error(dc,dc_pred)    ###### theta_error
@@ -232,10 +255,10 @@ if __name__ == "__main__":
     volfrac = 0.5
     maxiter = 100
     N = 514    ## number of node in patch
-    hmax = 0.02
+    hmax = 0.025
     hmaxC = 0.03
-    rmin = hmax
-    Ni = 10
+    rmin = hmax*1.5
+    Ni = 1
     Nf = 10
     Wi = 10
     Wu = 5

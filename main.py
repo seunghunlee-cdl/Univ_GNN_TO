@@ -22,8 +22,9 @@ from mesh import (get_clever2d_mesh, get_dof_map, get_mbb2d_mesh,
                   get_wrench2d_mesh, halfcircle2d)
 from MMA import mmasub, subsolv
 from model import MyGNN, generate_data, pred_input, training
-from utils import (calculate_center, compute_theta_error,
-                   generate_density_graph, map_density)
+from utils import (calculate_center, compute_theta_error, filter,
+                   generate_density_graph, generate_part_graph,
+                   graph_part_index, map_density)
 
 set_log_active(False)
 if os.path.exists("/workspace/output"):
@@ -60,14 +61,17 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
     center = calculate_center(mesh)
 
     H = csr_matrix(np.maximum(0, rmin - squareform(pdist(center))))
-    hs = H@np.ones(mesh.num_cells())
+    Hs = H@np.ones(mesh.num_cells())
 
     # count = np.zeros((len(mesh.coordinates()), 1))  ### num of patches overlab by node
     # for pn in part_info['nodes']:
         # count[pn] += 1
 
     graph_edge, graph_coords = generate_density_graph(mesh)
+    graph_part_info = graph_part_index(graph_edge, graph_coords, center, part_info)
 
+    graph = generate_part_graph(graph_part_info, graph_edge, graph_coords)
+ 
     uh = Function(V)
     phih = Function(F)   ## density
     m = Control(phih)
@@ -107,7 +111,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
         tic = time()
         # solve(aH == LH, rhoh) ## density Filtering
         rhoh.assign(phih)
-        rhoh.vector()[:] = (H@rhoh.vector()[:])/hs
+        rhoh.vector()[:] = filter(H,Hs,rhoh)
         t_filter.append(time()-tic)
 
         tic = time()
@@ -135,8 +139,8 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
             dc = compute_gradient(comp, m)   ### fine sensitivity
             dv = compute_gradient(vol, m)
 
-            dc.vector()[:] = (H@dc.vector()[:])/hs
-            dv.vector()[:] = (H@dv.vector()[:])/hs
+            dc.vector()[:] = filter(H,Hs,dc)
+            dv.vector()[:] = filter(H,Hs,dv)
 
             t_dcdv.append(time()-tic)
             ## Store
@@ -254,9 +258,9 @@ if __name__ == "__main__":
     ## parameters
     volfrac = 0.5
     maxiter = 100
-    N = 514    ## number of node in patch
-    hmax = 0.025
-    hmaxC = 0.03
+    N = 100    ## number of node in patch
+    hmax = 0.04
+    hmaxC = 0.1
     rmin = hmax*1.5
     Ni = 1
     Nf = 10

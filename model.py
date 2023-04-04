@@ -6,8 +6,11 @@ from matplotlib.tri import Triangulation
 from torch.utils.data import random_split
 from tqdm.auto import tqdm
 
+from utils import generate_density_graph
+
 
 def generate_data(x, y, node_ids, cell_ids, mesh):
+    graph_edge, graph_coords = generate_density_graph(mesh)
     coords = mesh.coordinates()
     num_elems = mesh.num_cells()
     cells = mesh.cells()
@@ -16,7 +19,7 @@ def generate_data(x, y, node_ids, cell_ids, mesh):
     # tmp[cell_ids] = np.arange(len(cell_ids))
     x_by_part = torch.tensor(x[cell_ids], dtype = torch.float)
     y_by_part = torch.tensor(y[cell_ids], dtype = torch.float)
-    cell_by_part = cells[cell_ids]
+    cell_by_part = cells[cell_ids]    ### node index
 
     T = Triangulation(*coords.T, triangles=cell_by_part)
     src, dst = T.edges.T

@@ -9,7 +9,7 @@ from torch_geometric.utils import (from_networkx, subgraph, to_networkx,
                                    to_undirected)
 
 
-def map_mesh(src_mesh, dst_mesh, values, method: str='linear'):
+def map_mesh(src_mesh, dst_mesh, values, method: str='nearest'):
     assert len(src_mesh) == len(values), \
         "Size of value mush match to either number of elements or nodes."
     
@@ -20,10 +20,16 @@ def map_mesh(src_mesh, dst_mesh, values, method: str='linear'):
 
     return mapped
 
-def map_density(rhoh, rhohC, mesh, meshC, v2d, v2dC):
+def map_density(rhoh, rhohC, mesh, meshC, v2d=None, v2dC=None):
+    src_coords = mesh.coordinates()
+    dst_coords = meshC.coordinates()
+    if len(rhoh.vector()[:]) != mesh.coordinates().shape[0]:
+        src_coords = src_coords[mesh.cells()].mean(1)
+    if v2d is None:
+        v2d = np.arange(src_coords.shape[0])
     rhohC.vector()[v2dC] = map_mesh(
-        mesh.coordinates(),
-        meshC.coordinates(),
+        src_coords,
+        dst_coords,
         rhoh.vector()[v2d])
 
 def compute_theta_error(dc, dc_pred):
@@ -65,8 +71,9 @@ def generate_part_graph(graph_part_info, graph_edge, graph_coords):
     graph = {'nodes':[], 'edge_index':[]}
     for i in range(len(graph_part_info)):
         subset = torch.tensor(graph_part_info[i])
-        edge_index, _ = subgraph(subset, torch.tensor(graph_edge.T), return_edge_mask = False)
+        edge_index, _ = subgraph(subset, torch.tensor(graph_edge.T), return_edge_mask = False, relabel_nodes=False)
         edge_index = to_undirected(edge_index)
+        # edge_index2, _ = subgraph(subset, torch.tensor(graph_edge.T), return_edge_mask = False, relabel_nodes=True)
         subdata = Data(x = graph_coords[graph_part_info[i]],edge_index = edge_index)
         g = to_networkx(subdata, remove_self_loops=True).to_undirected()
         all_nodes = set(g.nodes)
@@ -77,3 +84,7 @@ def generate_part_graph(graph_part_info, graph_edge, graph_coords):
         graph['nodes'].append(np.array(list(g.nodes)))
         graph['edge_index'].append(edge_index)
     return graph
+
+def convert_neighors_to_edges(eid, neighbors):
+    valid_neighbors = np.setdiff1d(neighbors, -1)
+    return np.array([(eid, i) for i in valid_neighbors])

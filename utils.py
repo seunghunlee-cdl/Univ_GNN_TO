@@ -1,12 +1,8 @@
-import networkx as nx
 import numpy as np
-import torch
 from matplotlib.tri import Triangulation
 from scipy.interpolate import griddata
-from scipy.spatial import KDTree, Voronoi, voronoi_plot_2d
-from torch_geometric.data import Data
-from torch_geometric.utils import (from_networkx, subgraph, to_networkx,
-                                   to_undirected)
+from scipy.sparse import coo_matrix
+from scipy.spatial import cKDTree
 
 
 def map_mesh(src_mesh, dst_mesh, values, method: str='nearest'):
@@ -45,46 +41,19 @@ def calculate_center(mesh):
     center = coords[trias].mean(1)
     return center
 
-def generate_density_graph(mesh):
-    coords = mesh.coordinates()
-    trias = mesh.cells()
-    q = np.zeros((len(trias), len(coords)), dtype = bool)
-    for i, tria in enumerate(trias):
-        q[i, tria] = True
-    v = Voronoi(coords)
-    edge = np.array(v.ridge_vertices)
-    edge = edge[(edge != -1).all(1)]
-    return edge, v.vertices
-
 def filter(H,Hs,x):
     return (H@x.vector()[:])/Hs
-
-def graph_part_index(graph_edge, graph_coords, center, part_info):
-    graph_part_info = []
-    target = KDTree(graph_coords)
-    _, index = target.query(center)
-    for i in range(len(part_info['elems'])):
-        graph_part_info.append(index[part_info['elems'][i]])
-    return graph_part_info
-
-def generate_part_graph(graph_part_info, graph_edge, graph_coords):
-    graph = {'nodes':[], 'edge_index':[]}
-    for i in range(len(graph_part_info)):
-        subset = torch.tensor(graph_part_info[i])
-        edge_index, _ = subgraph(subset, torch.tensor(graph_edge.T), return_edge_mask = False, relabel_nodes=False)
-        edge_index = to_undirected(edge_index)
-        # edge_index2, _ = subgraph(subset, torch.tensor(graph_edge.T), return_edge_mask = False, relabel_nodes=True)
-        subdata = Data(x = graph_coords[graph_part_info[i]],edge_index = edge_index)
-        g = to_networkx(subdata, remove_self_loops=True).to_undirected()
-        all_nodes = set(g.nodes)
-        connected_nodes = set(g.nodes).difference(set(nx.isolates(g)))
-        isolated_nodes = list(all_nodes.difference(connected_nodes))
-        for node in isolated_nodes:
-            g.remove_node(node)
-        graph['nodes'].append(np.array(list(g.nodes)))
-        graph['edge_index'].append(edge_index)
-    return graph
 
 def convert_neighors_to_edges(eid, neighbors):
     valid_neighbors = np.setdiff1d(neighbors, -1)
     return np.array([(eid, i) for i in valid_neighbors])
+
+def convolution_operator(center, rmin):
+    tree = cKDTree(center)
+    pairs = np.array(list(tree.query_pairs(rmin)))
+    distances, _ = tree.query(center[pairs[:,0]],k=1)
+    data = rmin-distances
+    num_points = len(center)
+    H = coo_matrix((data, (pairs[:, 0], pairs[:, 1])), shape=(num_points, num_points))
+    H = H + H.T
+    return H

@@ -13,9 +13,6 @@ from fenics import (XDMFFile, as_backend_type, dx, grad, inner, parameters,
 from fenics_adjoint import (Constant, Control, Function, assemble,
                             compute_gradient, interpolate, project, solve)
 from matplotlib.tri import Triangulation
-from scipy.sparse import csr_matrix
-from scipy.sparse.linalg import factorized
-from scipy.spatial.distance import pdist, squareform
 from torch_geometric.data import Data
 
 from fem import (build_weakform_filter, build_weakform_struct, epsilon,
@@ -24,9 +21,8 @@ from mesh import (get_clever2d_mesh, get_dof_map, get_mbb2d_mesh,
                   get_wrench2d_mesh, halfcircle2d)
 from MMA import mmasub, subsolv
 from model import MyGNN, generate_data, partition_graph, pred_input, training
-from utils import (calculate_center, compute_theta_error,
-                   convert_neighors_to_edges, filter, generate_density_graph,
-                   generate_part_graph, graph_part_index, map_density)
+from utils import (compute_theta_error, convert_neighors_to_edges,
+                   convolution_operator, filter, map_density)
 
 set_log_active(False)
 if os.path.exists("/workspace/output"):
@@ -34,7 +30,6 @@ if os.path.exists("/workspace/output"):
 SAVE_DIR = XDMFFile("output/result.xdmf")
 os.mkdir("/workspace/output")
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-# device = 'cpu'
 
 def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr):
     t_start = time()
@@ -56,7 +51,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
 
     print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
 
-    # v2d, d2v = get_dof_map(F)
     v2dC, d2vC = get_dof_map(FC)
     
     coords = mesh.coordinates()
@@ -64,12 +58,8 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
     center = coords[trias].mean(1)
 
 
-    H = csr_matrix(np.maximum(0, rmin - squareform(pdist(center))))
+    H = convolution_operator(center, rmin)
     Hs = H@np.ones(mesh.num_cells())
-
-    # count = np.zeros((len(mesh.coordinates()), 1))  ### num of patches overlab by node
-    # for pn in part_info['nodes']:
-        # count[pn] += 1
 
     T = Triangulation(*coords.T, triangles=trias)
     edge_index = np.concatenate([convert_neighors_to_edges(eid, neighbors) for eid, neighbors in enumerate(T.neighbors)]).T
@@ -79,7 +69,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
         edge_index=torch.tensor(edge_index, dtype=torch.long)
     )
     partitioned_graphs = [partition_graph(subset, global_graph) for subset in part_info['elems']]
-
 
     uh = Function(V)
     phih = Function(F)   ## density
@@ -125,8 +114,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
 
         tic = time()
         map_density(rhoh, rhohC, mesh, meshC, None, v2dC)
-        if loop == 10:
-            pass
+
         # rhohC = project(rhoh,FC)
 
 
@@ -156,10 +144,9 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
             dv.vector()[:] = filter(H,Hs,dv)
 
             t_dcdv.append(time()-tic)
+
             ## Store
             y, scalers, lb = output_assemble(dc, loop, scalers if loop > 0 else None, lb if loop > 0 else None)
-            # y /= count
-
             output_apd.append(y)
 
             if loop == Ni + Wi -1:
@@ -207,16 +194,8 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
                 net.eval()
                 for batch in pred_loader:
                     yhat = net(batch.x.to(device), batch.edge_index.to(device)).cpu()
-                    # dc_pred.vector()[v2d[batch.global_idx]] = scalers.inverse_transform(
-                    #     yhat.numpy()
-                    # )[:,0]
-                    # dc_pred.vector()[:] = yhat.numpy().ravel()
                     for i in range(len(batch)):
-                    #     # dc_pred.vector()[v2d[batch[i]].global_idx] += \
-                    #         # yhat.numpy()[batch.batch==i, 0]
-                    #     pass
                         dc_pred.vector()[batch[i].global_idx] = yhat.numpy()[batch.batch==i, 0]
-            # dc_pred.vector()[v2d] = scalers.inverse_transform(dc_pred.vector()[v2d].reshape(-1,1)).ravel()/count.ravel()
             dc_pred.vector()[:] = scalers.inverse_transform(dc_pred.vector()[:].reshape(-1,1)).ravel()
             t_pred.append(time()-tic)
 
@@ -251,9 +230,9 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
         
     SAVE_DIR.write(rhoh)
     plot(rhoh, cmap = "gray_r")
-    # plot(dc)
-    # plt.colorbar(plot(dc))
     plt.savefig("test.png")
+
+
     print("total time :", time()-t_start)
     print("filter time :", sum(t_filter))
     print("input time :", sum(t_input))
@@ -270,19 +249,19 @@ if __name__ == "__main__":
     ## parameters
     volfrac = 0.5
     maxiter = 100
-    N = 30    ## number of node in patch
-    hmax = 0.02
-    hmaxC = 0.04
-    rmin = 0.05
-    Ni = 10
-    Nf = 10
-    Wi = 10
-    Wu = 5
-    batch_size = 128
-    epochs = 5
-    n_hidden = 256
+    N = 5    ## number of node in patch
+    hmax = 0.04
+    hmaxC = 0.08
+    rmin = 0.08
+    Ni = 1
+    Nf = 20
+    Wi = 4
+    Wu = 4
+    batch_size = 30000
+    epochs = 2000
+    n_hidden = 200
     n_layer = 3
-    lr = 0.005
+    lr = 0.0005
     torch.manual_seed(42)
     random.seed(42)
     np.random.seed(42)

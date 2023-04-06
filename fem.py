@@ -62,8 +62,6 @@ def input_assemble(rhoh, uhC, V, F, FC, v2dC, loop, center, scaler=None):
 
     e_mapped = scaler.transform(e_mapped)
     x = np.c_[rhoh.vector()[:], e_mapped]
-    # x /= count
-    # x = np.c_[x, count]
     return x, scaler
 
 
@@ -79,6 +77,5 @@ def output_assemble(dc, loop, scalers = None,  lb = None, k = 5):
         scalers.fit(box.reshape(-1,1))
     box = scalers.transform(box.reshape(-1,1))
     dc.vector()[:] = box.ravel()
-    # return dc.vector()[v2d].reshape(-1,1), scalers, lb
     return dc.vector()[:].reshape(-1,1), scalers, lb
 

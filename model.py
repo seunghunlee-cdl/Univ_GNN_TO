@@ -8,40 +8,14 @@ from torch_geometric.data import Data
 from torch_geometric.utils import subgraph
 from tqdm.auto import tqdm
 
-from utils import generate_density_graph
-
 
 def generate_data(x, y, edge_ids, elem_ids, mesh):
-    # graph_edge, graph_coords = generate_density_graph(mesh)
-    # coords = mesh.coordinates()
-    # num_elems = mesh.num_cells()
-    # cells = mesh.cells()
-
-    # tmp = np.arange(num_elems)
-    # tmp[cell_ids] = np.arange(len(cell_ids))
     x_by_part = torch.tensor(x[elem_ids], dtype = torch.float)
     y_by_part = torch.tensor(y[elem_ids], dtype = torch.float)
-    # cell_by_part = cells[cell_ids]    ### node index
-
-    # T = Triangulation(*coords.T, triangles=cell_by_part)
-    # src, dst = T.edges.T
-    # edge_index = torch.tensor(np.c_[np.r_[src, dst], np.r_[dst, src]].T, dtype=torch.long)
-
     return pyg.data.Data(x=x_by_part, y=y_by_part, edge_index=edge_ids.edge_index, global_idx=torch.tensor(elem_ids.astype(int),dtype=torch.long))
 
 def pred_input(x, edge_ids, elem_ids, mesh):
-    # coords = mesh.coordinates()
-    # num_elems = mesh.num_cells()
-    # cells = mesh.cells()
-
-    # tmp = np.arange(num_nodes)
-    # tmp[node_ids] = np.arange(len(node_ids))
     x_by_part = torch.tensor(x[elem_ids], dtype = torch.float)
-    # cell_by_part = cells[cell_ids]
-    # T = Triangulation(*coords.T, triangles=cell_by_part)
-    # src, dst = T.edges.T
-    # edge_index = torch.tensor(np.c_[np.r_[src, dst], np.r_[dst, src]].T, dtype=torch.long)
-
     return pyg.data.Data(x=x_by_part, edge_index=edge_ids.edge_index, global_idx=torch.tensor(elem_ids.astype(int), dtype=torch.long))
 
 
@@ -80,12 +54,8 @@ def training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net=Non
     if net is None:
         net = MyGNN(4, n_hidden, n_layer, 0.5).to(device)
     optim = torch.optim.Adam(net.parameters(), lr=lr)
-    # criterion = torch.nn.MSELoss()
     criterion = torch.nn.L1Loss()
-    # def criterion(yhat, y):
-    #     umag = torch.norm(yhat[:, 0])
-    #     vmag = torch.norm(y[:, 0])
-    #     return 1 - torch.sum(yhat*y)/umag/vmag
+
     train_history = []
     val_history = []
     pbar = tqdm(range(epochs))

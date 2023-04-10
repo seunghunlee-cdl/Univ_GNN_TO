@@ -34,6 +34,7 @@ class MyGNN(torch.nn.Module):
             self.dropout.append(torch.nn.Dropout(p=dropout))
             self.hidden_act.append(torch.nn.ReLU())
         self.output = pyg.nn.GCNConv(n_hidden, 1)
+        self.output_act = torch.nn.Softplus()
         
     def forward(self, x, edge_index):
         x = self.input_act(self.input(x, edge_index))
@@ -41,7 +42,8 @@ class MyGNN(torch.nn.Module):
             x = layer(x, edge_index) + x
             x = drop(x)
             x = act(x)
-        return self.output(x, edge_index)
+        x = self.output_act(self.output(x, edge_index))
+        return -x
     
 def training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net=None):
     dataset_size = len(dataset)

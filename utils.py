@@ -1,4 +1,5 @@
 import numpy as np
+from fenics_adjoint import Constant
 from matplotlib.tri import Triangulation
 from scipy.interpolate import griddata
 from scipy.sparse import coo_matrix
@@ -56,4 +57,5 @@ def convolution_operator(center, rmin):
     num_points = len(center)
     H = coo_matrix((data, (pairs[:, 0], pairs[:, 1])), shape=(num_points, num_points))
     H = H + H.T
+    H.setdiag(rmin)
     return H

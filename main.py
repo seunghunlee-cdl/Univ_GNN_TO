@@ -25,17 +25,19 @@ from utils import (compute_theta_error, convert_neighors_to_edges,
                    convolution_operator, filter, map_density)
 
 set_log_active(False)
+torch.cuda.empty_cache()
 if os.path.exists("/workspace/output"):
     shutil.rmtree("/workspace/output")
 SAVE_DIR = XDMFFile("output/result.xdmf")
 os.mkdir("/workspace/output")
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr):
+def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr, continuation):
     t_start = time()
     ## time
     t_filter = []
     t_input  = []
+    t_output = []
     t_fine   = []
     t_coarse = []
     t_append = []
@@ -43,20 +45,30 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
     t_training=[]
     t_pred=[]
     t_optimizer=[]
+    t_mesh = []
+    t_pre = []
     input_apd=[]
     output_apd=[]
 
+    tic = time()
     mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info = get_mbb2d_mesh(hmax=hmax, N=N)
     meshC, VC, FC, bcsC, tC, dsC, uC, duC, _, _, _ = get_mbb2d_mesh(hmax = hmaxC)
+    t_mesh.append(time()-tic)
 
     print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
 
+    tic = time()
     v2dC, d2vC = get_dof_map(FC)
     
     coords = mesh.coordinates()
     trias = mesh.cells()
     center = coords[trias].mean(1)
 
+    if continuation == True:
+        penal = Constant(1.0)
+    else:
+        penal = Constant(3.0)
+        weight = 0
 
     H = convolution_operator(center, rmin)
     Hs = H@np.ones(mesh.num_cells())
@@ -94,17 +106,66 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
     d = np.zeros((mm,1))
     move = 0.2
 
-
     aH, LH = build_weakform_filter(rho, drho, phih, rmin) #### filter equation
-    a, L = build_weakform_struct(u, du, rhoh, t, ds) #### FEA-fine
+    a, L = build_weakform_struct(u, du, rhoh, t, ds, penal) #### FEA-fine
 
     uhC = Function(VC)
     rhohC = Function(FC)
 
-    aC, LC = build_weakform_struct(uC, duC, rhohC, tC, dsC) #### FEA-coarse
+    aC, LC = build_weakform_struct(uC, duC, rhohC, tC, dsC, penal) #### FEA-coarse
 
-
+    t_pre.append(time()-tic)
     loop = 0
+    iteration = 0
+    tict = time()
+    while iteration < 40 and continuation:
+        tic = time()
+        rhoh.assign(phih)
+        rhoh.vector()[:] = filter(H,Hs,rhoh)
+        t_filter.append(time()-tic)
+
+        tic = time()
+        a, L = build_weakform_struct(u, du, rhoh, t, ds, penal)
+        solve(a == L, uh, bcs = bcs)
+        t_fine.append(time()-tic)
+
+        tic = time()
+        Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
+        comp = assemble(Ws*dx)
+        vol = assemble(rhoh*dx)
+        dc = compute_gradient(comp, m)
+        dv = compute_gradient(vol, m)
+        t_dcdv.append(time()-tic)
+
+        tic = time()
+        dc.vector()[:] = filter(H,Hs,dc)
+        dv.vector()[:] = filter(H,Hs,dv)
+        t_filter.append(time()-tic)
+
+        tic = time()
+        mu0 = 1.0
+        mu1 = 1.0
+        f0val = comp
+        df0dx = dc.vector()[:].reshape(-1,1)
+        fval = np.array([[phih.vector()[:].sum()/n-volfrac]])
+        dfdx = dv.vector()[:].reshape(1,-1)
+        xval = phih.vector()[:].reshape(-1,1)
+        xmma,ymma,zmma,lam,xsi,eta,mu,zet,s,low,upp = \
+            mmasub(mm,n,iteration,xval,xmin,xmax,xold1,xold2,f0val,df0dx,fval,dfdx,low,upp,a0,aa,c,d,move)
+        xold2 = xold1.copy()
+        xold1 = xval.copy()
+        phih.vector()[:] = xmma.ravel()
+        t_optimizer.append(time()-tic)
+
+        # plot(rhoh, cmap="gray_r")
+        # plt.savefig("test.png")
+        if iteration == 19:
+            penal = Constant(2.0)
+        iteration += 1
+        print(f"it.: {iteration}", f",obj.: {comp}", f",penal.: {penal.values()[0]}")
+    penal_time = time()-tict
+    penal = Constant(3.0)
+    a, L = build_weakform_struct(u, du, rhoh, t, ds, penal)
     while loop < maxiter:
         tic = time()
         # solve(aH == LH, rhoh) ## density Filtering
@@ -112,42 +173,42 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
         rhoh.vector()[:] = filter(H,Hs,rhoh)
         t_filter.append(time()-tic)
 
-        tic = time()
         map_density(rhoh, rhohC, mesh, meshC, None, v2dC)
-
         # rhohC = project(rhoh,FC)
 
-
+        tic = time()
         solve(aC == LC, uhC, bcs=bcsC)  ##  Coarse FE
         t_coarse.append(time()-tic)
 
         tic = time()
         x, scaler = input_assemble(rhoh, uhC, V, F, FC, v2dC, loop, center, scaler if loop > 0 else None)
-        # x /= count
-
-        t_input.append(time()-tic)
         x_last = x  
         input_apd.append(x)
+        t_input.append(time()-tic)
                 
         if(loop<Ni+Wi) or (divmod(max(loop-Ni-Wi,1),Nf)[1]==0):
             tic = time()
             solve(a == L, uh, bcs=bcs)  ## fine
             t_fine.append(time()-tic)
-            Ws = inner(sigma(uh,rhoh), epsilon(uh))
+
+            tic = time()
+            Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
             comp = assemble(Ws*dx)
             vol = assemble(rhoh*dx)
-            tic = time()
             dc = compute_gradient(comp, m)   ### fine sensitivity
             dv = compute_gradient(vol, m)
-
-            dc.vector()[:] = filter(H,Hs,dc)
-            dv.vector()[:] = filter(H,Hs,dv)
-
             t_dcdv.append(time()-tic)
 
             ## Store
+            tic = time()
             y, scalers, lb = output_assemble(dc, loop, scalers if loop > 0 else None, lb if loop > 0 else None)
             output_apd.append(y)
+            t_output.append(time()-tic)
+
+            tic = time()
+            dc.vector()[:] = filter(H,Hs,dc)
+            dv.vector()[:] = filter(H,Hs,dv)
+            t_filter.append(time()-tic)
 
             if loop == Ni + Wi -1:
                 data_list = []
@@ -156,6 +217,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
                     data_list.append([generate_data(input_apd[-(i+1)], output_apd[-(i+1)], edge_ids, elem_ids, mesh) for edge_ids, elem_ids in zip(partitioned_graphs, part_info['elems'])])
                 dataset = sum(data_list,[])
                 t_append.append(time()-tic)
+
                 tic = time()
                 train_hist, val_hist, net  = training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device)
                 t_training.append(time()-tic)
@@ -166,6 +228,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
                     data_list.append([generate_data(input_apd[-(i+1)], output_apd[-(i+1)], edge_ids, elem_ids,mesh) for edge_ids, elem_ids in zip(partitioned_graphs, part_info['elems'])])
                 dataset = sum(data_list,[])
                 t_append.append(time()-tic)
+
                 tic = time()
                 train_hist, val_hist, net = training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net)
                 t_training.append(time()-tic)
@@ -187,15 +250,16 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
             t_optimizer.append(time()-tic)
         
         else:
-            tic = time()
             pred_input_data = [pred_input(x_last, edge_ids, elem_ids, mesh) for edge_ids, elem_ids in zip(partitioned_graphs, part_info['elems'])]
             pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = len(pred_input_data))
+            tic = time()
             with torch.no_grad():
                 net.eval()
                 for batch in pred_loader:
                     yhat = net(batch.x.to(device), batch.edge_index.to(device)).cpu()
-                    for i in range(len(batch)):
-                        dc_pred.vector()[batch[i].global_idx] = yhat.numpy()[batch.batch==i, 0]
+                    dc_pred.vector()[batch.global_idx] = yhat.numpy()[:, 0]
+                    # for i in range(len(batch)):
+                    #     dc_pred.vector()[batch[i].global_idx] = yhat.numpy()[batch.batch==i, 0]
             dc_pred.vector()[:] = scalers.inverse_transform(dc_pred.vector()[:].reshape(-1,1)).ravel()
             t_pred.append(time()-tic)
 
@@ -212,6 +276,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
             mu0 = 1.0
             mu1 = 1.0
             f0val = comp
+            dc_pred.vector()[:] = filter(H,Hs,dc_pred)
             df0dx = dc_pred.vector()[:].reshape(-1,1)
             fval = np.array([[phih.vector()[:].sum()/n-volfrac]])
             dfdx = dv.vector()[:].reshape(1,-1)
@@ -228,18 +293,21 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
         loop += 1
         print(f"it.: {loop}", f",obj.: {comp}")
         
-    SAVE_DIR.write(rhoh)
+    # SAVE_DIR.write(rhoh)
     plot(rhoh, cmap = "gray_r")
     plt.savefig("test.png")
 
 
     print("total time :", time()-t_start)
+    print("mesh time :", sum(t_mesh))
+    print("pre time :", sum(t_pre))
     print("filter time :", sum(t_filter))
     print("input time :", sum(t_input))
+    print("output time :", sum(t_output))
     print("fine time :", sum(t_fine))
     print("coarse time :", sum(t_coarse))
     print("sens time :", sum(t_dcdv))
-    print("append time :", sum(t_append))
+    print("stack time :", sum(t_append))
     print("training time :", sum(t_training))
     print("pred time :", sum(t_pred))
     print("optimizer time :", sum(t_optimizer))
@@ -248,21 +316,22 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
 if __name__ == "__main__":
     ## parameters
     volfrac = 0.5
-    maxiter = 100
-    N = 5    ## number of node in patch
-    hmax = 0.04
-    hmaxC = 0.08
-    rmin = 0.08
+    maxiter = 200
+    N = 4    ## number of node in patch
+    hmax = 0.01
+    hmaxC = hmax*2
+    rmin = hmax*5
     Ni = 1
-    Nf = 20
-    Wi = 4
-    Wu = 4
-    batch_size = 30000
-    epochs = 2000
-    n_hidden = 200
-    n_layer = 3
+    Nf = 10
+    Wi = 10
+    Wu = 5
+    batch_size = 300
+    epochs = 3
+    n_hidden = 128
+    n_layer = 4
     lr = 0.0005
+    continuation = False
     torch.manual_seed(42)
     random.seed(42)
     np.random.seed(42)
-    main(volfrac, maxiter, N, hmax, hmaxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr)
+    main(volfrac, maxiter, N, hmax, hmaxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr, continuation)

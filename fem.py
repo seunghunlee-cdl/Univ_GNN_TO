@@ -15,7 +15,7 @@ def epsilon(u):
     ])
 
 
-def sigma(u, rho, penal=adj.Constant(3.0), E1=adj.Constant(1.0), nu=adj.Constant(1/3)):
+def sigma(u, rho, penal, E1=adj.Constant(1.0), nu=adj.Constant(1/3)):
     e = epsilon(u)
     E0 = 1e-9*E1
     E = E0 + rho**penal*(E1 - E0)
@@ -31,8 +31,8 @@ def build_weakform_filter(rho, drho, phih, rmin):
     return aH, LH
 
 
-def build_weakform_struct(u, du, rhoh, t, ds, subdomain_id=2):
-    a = fe.inner(sigma(u,rhoh), epsilon(du))*fe.dx
+def build_weakform_struct(u, du, rhoh, t, ds, penal, subdomain_id=2):
+    a = fe.inner(sigma(u,rhoh,penal), epsilon(du))*fe.dx
     L = fe.inner(t, du)*ds(subdomain_id)
     return a, L
 
@@ -67,11 +67,11 @@ def input_assemble(rhoh, uhC, V, F, FC, v2dC, loop, center, scaler=None):
 
 def output_assemble(dc, loop, scalers = None,  lb = None, k = 5):
     box = dc.vector()[:].copy()
-    if lb is None:
-        q1, q3 = np.percentile(box, [25, 75])
-        iqr = q3 - q1
-        lb = q1 - k*iqr
-    box[box < lb] = box[box >= lb].min()
+    # if lb is None:
+    #     q1, q3 = np.percentile(box, [25, 75])
+    #     iqr = q3 - q1
+    #     lb = q1 - k*iqr
+    # box[box < lb] = box[box >= lb].min()
     if scalers is None:
         scalers = MinMaxScaler(feature_range=(-1,0))
         scalers.fit(box.reshape(-1,1))

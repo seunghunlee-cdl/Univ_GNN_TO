@@ -16,7 +16,7 @@ from matplotlib.tri import Triangulation
 from torch_geometric.data import Data
 
 from fem import (build_weakform_filter, build_weakform_struct, epsilon,
-                 input_assemble, output_assemble, sigma)
+                 input_assemble, oc, output_assemble, sigma)
 from mesh import (get_clever2d_mesh, get_dof_map, get_mbb2d_mesh,
                   get_wrench2d_mesh, halfcircle2d)
 from MMA import mmasub, subsolv
@@ -32,7 +32,7 @@ SAVE_DIR = XDMFFile("output/result.xdmf")
 os.mkdir("/workspace/output")
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr, continuation):
+def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per_epoch, epochs, n_hidden, n_layer, lr, optimizer, continuation):
     t_start = time()
     ## time
     t_filter = []
@@ -57,6 +57,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
 
     print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
 
+    batch_size = np.ceil(len(part_info['nodes'])/target_step_per_epoch).astype("int")
     tic = time()
     v2dC, d2vC = get_dof_map(FC)
     
@@ -91,20 +92,23 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
     rhoh = Function(F)   ## Filtered density
 
     ## MMA parameters
-    mm = 1
-    n = mesh.num_cells()
-    xmin = np.zeros((n,1))
-    xmax = np.ones((n,1))
-    xval = phih.vector()[:][np.newaxis].T
-    xold1 = xval.copy()
-    xold2 = xval.copy()
-    low = np.ones((n,1))
-    upp = np.ones((n,1))
-    a0 = 1.0
-    aa = np.zeros((mm,1))
-    c = 10000*np.ones((mm,1))
-    d = np.zeros((mm,1))
-    move = 0.2
+    if optimizer == 0:
+        mm = 1
+        n = mesh.num_cells()
+        xmin = np.zeros((n,1))
+        xmax = np.ones((n,1))
+        xval = phih.vector()[:][np.newaxis].T
+        xold1 = xval.copy()
+        xold2 = xval.copy()
+        low = np.ones((n,1))
+        upp = np.ones((n,1))
+        a0 = 1.0
+        aa = np.zeros((mm,1))
+        c = 10000*np.ones((mm,1))
+        d = np.zeros((mm,1))
+        move = 0.2
+    elif optimizer == 1:
+        xold1 = phih.vector()[:].copy()
 
     aH, LH = build_weakform_filter(rho, drho, phih, rmin) #### filter equation
     a, L = build_weakform_struct(u, du, rhoh, t, ds, penal) #### FEA-fine
@@ -143,18 +147,22 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
         t_filter.append(time()-tic)
 
         tic = time()
-        mu0 = 1.0
-        mu1 = 1.0
-        f0val = comp
-        df0dx = dc.vector()[:].reshape(-1,1)
-        fval = np.array([[phih.vector()[:].sum()/n-volfrac]])
-        dfdx = dv.vector()[:].reshape(1,-1)
-        xval = phih.vector()[:].reshape(-1,1)
-        xmma,ymma,zmma,lam,xsi,eta,mu,zet,s,low,upp = \
-            mmasub(mm,n,iteration,xval,xmin,xmax,xold1,xold2,f0val,df0dx,fval,dfdx,low,upp,a0,aa,c,d,move)
-        xold2 = xold1.copy()
-        xold1 = xval.copy()
-        phih.vector()[:] = xmma.ravel()
+        if optimizer == 0:
+            mu0 = 1.0
+            mu1 = 1.0
+            f0val = comp
+            df0dx = dc.vector()[:].reshape(-1,1)
+            fval = np.array([[phih.vector()[:].sum()/n-volfrac]])
+            dfdx = dv.vector()[:].reshape(1,-1)
+            xval = phih.vector()[:].reshape(-1,1)
+            xmma,ymma,zmma,lam,xsi,eta,mu,zet,s,low,upp = \
+                mmasub(mm,n,iteration,xval,xmin,xmax,xold1,xold2,f0val,df0dx,fval,dfdx,low,upp,a0,aa,c,d,move)
+            xold2 = xold1.copy()
+            xold1 = xval.copy()
+            phih.vector()[:] = xmma.ravel()
+        elif optimizer == 1:
+            xold1[:] = phih.vector()[:].copy()
+            phih.vector()[:] = oc(phih,dc,dv,mesh,H,Hs,volfrac)
         t_optimizer.append(time()-tic)
 
         # plot(rhoh, cmap="gray_r")
@@ -199,17 +207,18 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
             dv = compute_gradient(vol, m)
             t_dcdv.append(time()-tic)
 
+            tic = time()
+            dc.vector()[:] = filter(H,Hs,dc)
+            dv.vector()[:] = filter(H,Hs,dv)
+            t_filter.append(time()-tic)
+
             ## Store
             tic = time()
             y, scalers, lb = output_assemble(dc, loop, scalers if loop > 0 else None, lb if loop > 0 else None)
             output_apd.append(y)
             t_output.append(time()-tic)
 
-            tic = time()
-            dc.vector()[:] = filter(H,Hs,dc)
-            dv.vector()[:] = filter(H,Hs,dv)
-            t_filter.append(time()-tic)
-
+        
             if loop == Ni + Wi -1:
                 data_list = []
                 tic = time()
@@ -235,18 +244,22 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
 
             ## MMA parameters
             tic = time()
-            mu0 = 1.0
-            mu1 = 1.0
-            f0val = comp
-            df0dx = dc.vector()[:].reshape(-1,1)
-            fval = np.array([[phih.vector()[:].sum()/n-volfrac]])
-            dfdx = dv.vector()[:].reshape(1,-1)
-            xval = phih.vector()[:].reshape(-1,1)
-            xmma,ymma,zmma,lam,xsi,eta,mu,zet,s,low,upp = \
-                mmasub(mm,n,loop,xval,xmin,xmax,xold1,xold2,f0val,df0dx,fval,dfdx,low,upp,a0,aa,c,d,move)
-            xold2 = xold1.copy()
-            xold1 = xval.copy()
-            phih.vector()[:] = xmma.ravel()
+            if optimizer == 0:
+                mu0 = 1.0
+                mu1 = 1.0
+                f0val = comp
+                df0dx = dc.vector()[:].reshape(-1,1)
+                fval = np.array([[phih.vector()[:].sum()/n-volfrac]])
+                dfdx = dv.vector()[:].reshape(1,-1)
+                xval = phih.vector()[:].reshape(-1,1)
+                xmma,ymma,zmma,lam,xsi,eta,mu,zet,s,low,upp = \
+                    mmasub(mm,n,loop,xval,xmin,xmax,xold1,xold2,f0val,df0dx,fval,dfdx,low,upp,a0,aa,c,d,move)
+                xold2 = xold1.copy()
+                xold1 = xval.copy()
+                phih.vector()[:] = xmma.ravel()
+            elif optimizer == 1:
+                xold1[:] = phih.vector()[:].copy()
+                phih.vector()[:] = oc(phih, dc, dv, mesh, H, Hs, volfrac)
             t_optimizer.append(time()-tic)
         
         else:
@@ -276,7 +289,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
             mu0 = 1.0
             mu1 = 1.0
             f0val = comp
-            dc_pred.vector()[:] = filter(H,Hs,dc_pred)
+            # dc_pred.vector()[:] = filter(H,Hs,dc_pred)
             df0dx = dc_pred.vector()[:].reshape(-1,1)
             fval = np.array([[phih.vector()[:].sum()/n-volfrac]])
             dfdx = dv.vector()[:].reshape(1,-1)
@@ -304,34 +317,35 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, batch_size, epo
     print("filter time :", sum(t_filter))
     print("input time :", sum(t_input))
     print("output time :", sum(t_output))
-    print("fine time :", sum(t_fine))
-    print("coarse time :", sum(t_coarse))
+    print("fine time :", sum(t_fine), "call :", len(t_fine), "once :", sum(t_fine)/len(t_fine))
+    print("coarse time :", sum(t_coarse), "call :", len(t_coarse), "once :", sum(t_coarse)/len(t_coarse))
     print("sens time :", sum(t_dcdv))
     print("stack time :", sum(t_append))
-    print("training time :", sum(t_training))
-    print("pred time :", sum(t_pred))
-    print("optimizer time :", sum(t_optimizer))
+    print("training time :", sum(t_training), "call :", len(t_training), "once :", sum(t_training)/len(t_training))
+    print("pred time :", sum(t_pred), "call :", len(t_pred), "once :", sum(t_pred)/len(t_pred))
+    print("optimizer time :", sum(t_optimizer), "call :", len(t_optimizer), "once :", sum(t_optimizer)/len(t_optimizer))
 
 
 if __name__ == "__main__":
     ## parameters
     volfrac = 0.5
     maxiter = 200
-    N = 4    ## number of node in patch
-    hmax = 0.01
+    N = 5    ## number of elem in patch
+    hmax = 0.0075
     hmaxC = hmax*2
-    rmin = hmax*5
+    rmin = hmax*3
     Ni = 1
     Nf = 10
     Wi = 10
     Wu = 5
-    batch_size = 300
+    target_step_per_epoch = 15
     epochs = 3
     n_hidden = 128
     n_layer = 4
     lr = 0.0005
-    continuation = False
+    optimizer = 1   ####   0 --> MMA,   1 --> OC
+    continuation = True
     torch.manual_seed(42)
     random.seed(42)
     np.random.seed(42)
-    main(volfrac, maxiter, N, hmax, hmaxC, rmin, Ni, Nf, Wi, Wu, batch_size, epochs, n_hidden, n_layer, lr, continuation)
+    main(volfrac, maxiter, N, hmax, hmaxC, rmin, Ni, Nf, Wi, Wu, target_step_per_epoch, epochs, n_hidden, n_layer, lr, optimizer, continuation)

@@ -4,7 +4,7 @@ import numpy as np
 from scipy.sparse.linalg import factorized
 from sklearn.preprocessing import MinMaxScaler
 
-from utils import map_mesh
+from utils import filter, map_mesh
 
 # fe.parameters["linear_algebra_backend"] = "Eigen"
 
@@ -79,3 +79,13 @@ def output_assemble(dc, loop, scalers = None,  lb = None, k = 5):
     dc.vector()[:] = box.ravel()
     return dc.vector()[:].reshape(-1,1), scalers, lb
 
+def oc(density,dc,dv,mesh,H,Hs,volfrac):
+    l1 = 0
+    l2 = 1e9
+    move = 0.2
+    while l2 - l1 > 1e-4:
+        lmid = 0.5*(l2+l1)
+        density_new = np.maximum(0.001, np.maximum(density.vector()[:] - move, np.minimum(1.0, np.minimum(density.vector()[:] + move, density.vector()[:] * np.sqrt(-dc.vector()[:] / dv.vector()[:] /lmid)))))
+        xPhys = (H@density_new)/Hs
+        l1, l2 = (lmid, l2) if sum(xPhys) - volfrac * mesh.num_cells()>0 else (l1, lmid)
+    return density_new

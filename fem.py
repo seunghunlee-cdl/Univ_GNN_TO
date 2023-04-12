@@ -67,11 +67,11 @@ def input_assemble(rhoh, uhC, V, F, FC, v2dC, loop, center, scaler=None):
 
 def output_assemble(dc, loop, scalers = None,  lb = None, k = 5):
     box = dc.vector()[:].copy()
-    # if lb is None:
-    #     q1, q3 = np.percentile(box, [25, 75])
-    #     iqr = q3 - q1
-    #     lb = q1 - k*iqr
-    # box[box < lb] = box[box >= lb].min()
+    if lb is None:
+        q1, q3 = np.percentile(box, [25, 75])
+        iqr = q3 - q1
+        lb = q1 - k*iqr
+    box[box < lb] = box[box >= lb].min()
     if scalers is None:
         scalers = MinMaxScaler(feature_range=(-1,0))
         scalers.fit(box.reshape(-1,1))
@@ -85,7 +85,7 @@ def oc(density,dc,dv,mesh,H,Hs,volfrac):
     move = 0.2
     while l2 - l1 > 1e-4:
         lmid = 0.5*(l2+l1)
-        density_new = np.maximum(0.001, np.maximum(density.vector()[:] - move, np.minimum(1.0, np.minimum(density.vector()[:] + move, density.vector()[:] * np.sqrt(-dc.vector()[:] / dv.vector()[:] /lmid)))))
-        xPhys = (H@density_new)/Hs
-        l1, l2 = (lmid, l2) if sum(xPhys) - volfrac * mesh.num_cells()>0 else (l1, lmid)
+        density_new = np.maximum(0.0, np.maximum(density.vector()[:] - move, np.minimum(1.0, np.minimum(density.vector()[:] + move, density.vector()[:] * np.sqrt(-dc.vector()[:] / dv.vector()[:] /lmid)))))
+        # xphys = (H@density_new)/Hs
+        l1, l2 = (lmid, l2) if sum(density_new) - volfrac * mesh.num_cells()>0 else (l1, lmid)
     return density_new

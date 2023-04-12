@@ -57,7 +57,8 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
 
     print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
 
-    batch_size = np.ceil(len(part_info['nodes'])/target_step_per_epoch).astype("int")
+    batch_size = np.ceil(len(part_info['nodes'])/target_step_per_epoch).astype(int).item()
+    # batch_size = 300
     tic = time()
     v2dC, d2vC = get_dof_map(FC)
     
@@ -89,6 +90,9 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     phih.vector()[:] = volfrac
     dc_pred = Function(F)
 
+    dc_bar = Function(F)
+    dv_bar = Function(F)
+    
     rhoh = Function(F)   ## Filtered density
 
     ## MMA parameters
@@ -107,9 +111,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         c = 10000*np.ones((mm,1))
         d = np.zeros((mm,1))
         move = 0.2
-    elif optimizer == 1:
-        xold1 = phih.vector()[:].copy()
-
     aH, LH = build_weakform_filter(rho, drho, phih, rmin) #### filter equation
     a, L = build_weakform_struct(u, du, rhoh, t, ds, penal) #### FEA-fine
 
@@ -142,8 +143,8 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         t_dcdv.append(time()-tic)
 
         tic = time()
-        dc.vector()[:] = filter(H,Hs,dc)
-        dv.vector()[:] = filter(H,Hs,dv)
+        dc_bar.vector()[:] = filter(H,Hs,dc)
+        dv_bar.vector()[:] = filter(H,Hs,dv)
         t_filter.append(time()-tic)
 
         tic = time()
@@ -151,9 +152,9 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             mu0 = 1.0
             mu1 = 1.0
             f0val = comp
-            df0dx = dc.vector()[:].reshape(-1,1)
+            df0dx = dc_bar.vector()[:].reshape(-1,1)
             fval = np.array([[phih.vector()[:].sum()/n-volfrac]])
-            dfdx = dv.vector()[:].reshape(1,-1)
+            dfdx = dv_bar.vector()[:].reshape(1,-1)
             xval = phih.vector()[:].reshape(-1,1)
             xmma,ymma,zmma,lam,xsi,eta,mu,zet,s,low,upp = \
                 mmasub(mm,n,iteration,xval,xmin,xmax,xold1,xold2,f0val,df0dx,fval,dfdx,low,upp,a0,aa,c,d,move)
@@ -161,8 +162,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             xold1 = xval.copy()
             phih.vector()[:] = xmma.ravel()
         elif optimizer == 1:
-            xold1[:] = phih.vector()[:].copy()
-            phih.vector()[:] = oc(phih,dc,dv,mesh,H,Hs,volfrac)
+            phih.vector()[:] = oc(phih,dc_bar,dv_bar,mesh,H,Hs,volfrac)
         t_optimizer.append(time()-tic)
 
         # plot(rhoh, cmap="gray_r")
@@ -171,18 +171,18 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             penal = Constant(2.0)
         iteration += 1
         print(f"it.: {iteration}", f",obj.: {comp}", f",penal.: {penal.values()[0]}")
+
     penal_time = time()-tict
     penal = Constant(3.0)
-    a, L = build_weakform_struct(u, du, rhoh, t, ds, penal)
+    if continuation:
+        a, L = build_weakform_struct(u, du, rhoh, t, ds, penal)
     while loop < maxiter:
         tic = time()
-        # solve(aH == LH, rhoh) ## density Filtering
         rhoh.assign(phih)
         rhoh.vector()[:] = filter(H,Hs,rhoh)
         t_filter.append(time()-tic)
 
         map_density(rhoh, rhohC, mesh, meshC, None, v2dC)
-        # rhohC = project(rhoh,FC)
 
         tic = time()
         solve(aC == LC, uhC, bcs=bcsC)  ##  Coarse FE
@@ -208,8 +208,8 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             t_dcdv.append(time()-tic)
 
             tic = time()
-            dc.vector()[:] = filter(H,Hs,dc)
-            dv.vector()[:] = filter(H,Hs,dv)
+            dc_bar.vector()[:] = filter(H,Hs,dc)
+            dv_bar.vector()[:] = filter(H,Hs,dv)
             t_filter.append(time()-tic)
 
             ## Store
@@ -242,15 +242,15 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
                 train_hist, val_hist, net = training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net)
                 t_training.append(time()-tic)
 
-            ## MMA parameters
+            ## Optimizer parameters
             tic = time()
             if optimizer == 0:
                 mu0 = 1.0
                 mu1 = 1.0
                 f0val = comp
-                df0dx = dc.vector()[:].reshape(-1,1)
+                df0dx = dc_bar.vector()[:].reshape(-1,1)
                 fval = np.array([[phih.vector()[:].sum()/n-volfrac]])
-                dfdx = dv.vector()[:].reshape(1,-1)
+                dfdx = dv_bar.vector()[:].reshape(1,-1)
                 xval = phih.vector()[:].reshape(-1,1)
                 xmma,ymma,zmma,lam,xsi,eta,mu,zet,s,low,upp = \
                     mmasub(mm,n,loop,xval,xmin,xmax,xold1,xold2,f0val,df0dx,fval,dfdx,low,upp,a0,aa,c,d,move)
@@ -258,8 +258,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
                 xold1 = xval.copy()
                 phih.vector()[:] = xmma.ravel()
             elif optimizer == 1:
-                xold1[:] = phih.vector()[:].copy()
-                phih.vector()[:] = oc(phih, dc, dv, mesh, H, Hs, volfrac)
+                phih.vector()[:]= oc(phih, dc_bar, dv_bar, mesh, H, Hs, volfrac)
             t_optimizer.append(time()-tic)
         
         else:
@@ -271,9 +270,9 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
                 for batch in pred_loader:
                     yhat = net(batch.x.to(device), batch.edge_index.to(device)).cpu()
                     dc_pred.vector()[batch.global_idx] = yhat.numpy()[:, 0]
-                    # for i in range(len(batch)):
-                    #     dc_pred.vector()[batch[i].global_idx] = yhat.numpy()[batch.batch==i, 0]
+
             dc_pred.vector()[:] = scalers.inverse_transform(dc_pred.vector()[:].reshape(-1,1)).ravel()
+            dc_pred.vector()[np.where(dc_pred.vector()[:]>0)[0]]=0
             t_pred.append(time()-tic)
 
             # therr = compute_theta_error(dc,dc_pred)    ###### theta_error
@@ -284,21 +283,27 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             dv = compute_gradient(vol, m)
             t_dcdv.append(time()-tic)
 
-            ## MMA parameters
             tic = time()
-            mu0 = 1.0
-            mu1 = 1.0
-            f0val = comp
-            # dc_pred.vector()[:] = filter(H,Hs,dc_pred)
-            df0dx = dc_pred.vector()[:].reshape(-1,1)
-            fval = np.array([[phih.vector()[:].sum()/n-volfrac]])
-            dfdx = dv.vector()[:].reshape(1,-1)
-            xval = phih.vector()[:].reshape(-1,1)
-            xmma,ymma,zmma,lam,xsi,eta,mu,zet,s,low,upp = \
-                mmasub(mm,n,loop,xval,xmin,xmax,xold1,xold2,f0val,df0dx,fval,dfdx,low,upp,a0,aa,c,d,move)
-            xold2 = xold1.copy()
-            xold1 = xval.copy()
-            phih.vector()[:] = xmma.ravel()
+            dv_bar.vector()[:] = filter(H,Hs,dv)
+            t_filter.append(time()-tic)
+            ## Optimizer parameters
+            tic = time()
+            if optimizer ==0:
+                mu0 = 1.0
+                mu1 = 1.0
+                f0val = comp
+                # dc_pred.vector()[:] = filter(H,Hs,dc_pred)
+                df0dx = dc_pred.vector()[:].reshape(-1,1)
+                fval = np.array([[phih.vector()[:].sum()/n-volfrac]])
+                dfdx = dv_bar.vector()[:].reshape(1,-1)
+                xval = phih.vector()[:].reshape(-1,1)
+                xmma,ymma,zmma,lam,xsi,eta,mu,zet,s,low,upp = \
+                    mmasub(mm,n,loop,xval,xmin,xmax,xold1,xold2,f0val,df0dx,fval,dfdx,low,upp,a0,aa,c,d,move)
+                xold2 = xold1.copy()
+                xold1 = xval.copy()
+                phih.vector()[:] = xmma.ravel()
+            elif optimizer == 1:
+                phih.vector()[:] = oc(phih, dc_pred, dv_bar, mesh, H, Hs, volfrac)
             t_optimizer.append(time()-tic)
 
         # plot(rhoh, cmap="gray_r")
@@ -308,8 +313,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         
     # SAVE_DIR.write(rhoh)
     plot(rhoh, cmap = "gray_r")
-    plt.savefig("test.png")
-
+    plt.savefig("test"+'.png')
 
     print("total time :", time()-t_start)
     print("mesh time :", sum(t_mesh))
@@ -327,10 +331,15 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
 
 
 if __name__ == "__main__":
+    # import sys
+    # num_n = [5,50,100,150,200,250,350,450]
+    # num_q = ('5.txt','50.txt','100.txt','150.txt','200.txt','250.txt','350.txt','450.txt')
+    # for i in range(len(num_n)):
+
     ## parameters
     volfrac = 0.5
     maxiter = 200
-    N = 5    ## number of elem in patch
+    N = 350    ## number of elem in patch
     hmax = 0.0075
     hmaxC = hmax*2
     rmin = hmax*3
@@ -348,4 +357,9 @@ if __name__ == "__main__":
     torch.manual_seed(42)
     random.seed(42)
     np.random.seed(42)
+   
+    
+        # f = open(num_q[i],'w')
+        # nnn = num_q[i]
+        # N = num_n[i]
     main(volfrac, maxiter, N, hmax, hmaxC, rmin, Ni, Nf, Wi, Wu, target_step_per_epoch, epochs, n_hidden, n_layer, lr, optimizer, continuation)

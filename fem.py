@@ -1,6 +1,7 @@
 import fenics as fe
 import fenics_adjoint as adj
 import numpy as np
+from matplotlib.tri import LinearTriInterpolator
 from scipy.sparse.linalg import factorized
 from sklearn.preprocessing import MinMaxScaler
 
@@ -41,20 +42,13 @@ def displacement(u):
     return fe.sqrt(u[0]**2 + u[1]**2)
 
 
-def input_assemble(rhoh, uhC, V, F, FC, v2dC, loop, center, scaler=None):
-    # eC = epsilon(uhC)
-    uhbar = adj.interpolate(uhC,V)
-    strain = epsilon(uhbar)
-
+def input_assemble(T, rhoh, uhC, V, F, FC, v2dC, center, scaler=None):
+    eC = epsilon(uhC)
     e_mapped = np.zeros((F.mesh().num_cells(), 3))
-    # for i in range(3):
-    #     e_mapped[:, i] = map_mesh(
-    #         FC.mesh().coordinates(),
-    #         F.mesh().coordinates(),
-    #         adj.project(eC[i], FC).vector()[v2dC]
-    #     )
+
     for i in range(3):
-        e_mapped[:,i]=adj.project(strain[i],F).vector()[:]
+        coarse_node2fine_cell = LinearTriInterpolator(T, adj.project(eC[i], FC).vector()[:])
+        e_mapped[:, i] = coarse_node2fine_cell(*center.T).data
 
     if scaler is None:
         scaler = MinMaxScaler(feature_range=(-1,1))
@@ -80,7 +74,6 @@ def output_assemble(dc, loop, scalers = None,  lb = None, k = 5):
     return dc.vector()[:].reshape(-1,1), scalers, lb
 
 def oc(density,dc,dv,mesh,H,Hs,volfrac,areas):
-
     l1 = 0
     l2 = 1e9
     move = 0.2

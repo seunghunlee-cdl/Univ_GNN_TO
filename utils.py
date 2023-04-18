@@ -61,10 +61,13 @@ def convolution_operator(center, rmin):
     return H
 
 def compute_triangle_area(triangles):
-
     x1, y1 = triangles[:, 0, 0], triangles[:, 0, 1]
     x2, y2 = triangles[:, 1, 0], triangles[:, 1, 1]
     x3, y3 = triangles[:, 2, 0], triangles[:, 2, 1]
-
     area = 0.5 * np.abs((x1*y2 + x2*y3 + x3*y1) - (y1*x2 + y2*x3 + y3*x1))
     return area
+
+def tree_maker(center, meshC):
+    tree = cKDTree(center)
+    _, fcc2cn = tree.query(meshC.coordinates())
+    return fcc2cn

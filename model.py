@@ -8,6 +8,8 @@ from torch_geometric.data import Data
 from torch_geometric.utils import subgraph
 from tqdm.auto import tqdm
 
+from utils import convert_neighors_to_edges
+
 
 def generate_data(x, y, edge_ids, elem_ids, mesh):
     x_by_part = torch.tensor(x[elem_ids], dtype = torch.float)
@@ -95,3 +97,13 @@ def partition_graph(subset, data):
         x=data.x[subset],
         edge_index=dummy[edge_index_]
     )
+
+def graph_partitioning(coords, trias, part_info, center):
+    T = Triangulation(*coords.T, triangles=trias)
+    edge_index = np.concatenate([convert_neighors_to_edges(eid, neighbors) for eid, neighbors in enumerate(T.neighbors)]).T
+    global_graph = Data(
+        x=torch.tensor(center), 
+        edge_index=torch.tensor(edge_index, dtype=torch.long)
+    )
+    partitioned_graphs = [partition_graph(subset, global_graph) for subset in part_info['elems']]
+    return partitioned_graphs

@@ -19,11 +19,11 @@ from fem import (build_weakform_filter, build_weakform_struct, epsilon,
                  input_assemble, oc, output_assemble, sigma)
 from mesh import (get_clever2d_mesh, get_dof_map, get_mbb2d_mesh,
                   get_wrench2d_mesh, halfcircle2d)
-from MMA import mmasub, subsolv
-from model import MyGNN, generate_data, partition_graph, pred_input, training
+from MMA import mmasub
+from model import (MyGNN, generate_data, graph_partitioning, pred_input,
+                   training)
 from utils import (compute_theta_error, compute_triangle_area,
-                   convert_neighors_to_edges, convolution_operator, filter,
-                   map_density)
+                   convolution_operator, filter, map_density, tree_maker)
 
 set_log_active(False)
 torch.cuda.empty_cache()
@@ -55,7 +55,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     tic = time()
     mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info = get_mbb2d_mesh(hmax=hmax, N=N)
     meshC, VC, FC, bcsC, tC, dsC, uC, duC, _, _, _ = get_mbb2d_mesh(hmax = hmaxC)
-    areas = compute_triangle_area(mesh.coordinates()[mesh.cells()])
     t_mesh.append(time()-tic)
 
     print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
@@ -69,23 +68,18 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     trias = mesh.cells()
     center = coords[trias].mean(1)
 
+    areas = compute_triangle_area(coords[trias])
+    fcc2cn = tree_maker(center, meshC)
+
     if continuation == True:
         penal = Constant(1.0)
     else:
         penal = Constant(3.0)
-        weight = 0
 
     H = convolution_operator(center, rmin)
     Hs = H@np.ones(mesh.num_cells())
 
-    T = Triangulation(*coords.T, triangles=trias)
-    edge_index = np.concatenate([convert_neighors_to_edges(eid, neighbors) for eid, neighbors in enumerate(T.neighbors)]).T
-    pid = 0
-    global_graph = Data(
-        x=torch.tensor(center), 
-        edge_index=torch.tensor(edge_index, dtype=torch.long)
-    )
-    partitioned_graphs = [partition_graph(subset, global_graph) for subset in part_info['elems']]
+    partitioned_graphs = graph_partitioning(coords, trias, part_info, center)
 
     uh = Function(V)
     phih = Function(F)   ## density
@@ -115,6 +109,9 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         c = 10000*np.ones((mm,1))
         d = np.zeros((mm,1))
         move = 0.2
+
+    T = Triangulation(*meshC.coordinates().T, triangles=meshC.cells())
+
     aH, LH = build_weakform_filter(rho, drho, phih, rmin) #### filter equation
     a, L = build_weakform_struct(u, du, rhoh, t, ds, penal) #### FEA-fine
 
@@ -185,14 +182,15 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         rhoh.vector()[:] = filter(H,Hs,rhoh.vector()[:])
         t_filter.append(time()-tic)
 
-        map_density(rhoh, rhohC, mesh, meshC, None, v2dC)
+        # map_density(rhoh, rhohC, mesh, meshC, None, v2dC)
+        rhohC.vector()[v2dC] = rhoh.vector()[fcc2cn] ## density mapping
 
         tic = time()
         solve(aC == LC, uhC, bcs=bcsC)  ##  Coarse FE
         t_coarse.append(time()-tic)
 
         tic = time()
-        x, scaler = input_assemble(rhoh, uhC, V, F, FC, v2dC, loop, center, scaler if loop > 0 else None)
+        x, scaler = input_assemble(T, rhoh, uhC, V, F, FC, v2dC, center, scaler if loop > 0 else None)
         x_last = x  
         input_apd.append(x)
         t_input.append(time()-tic)
@@ -286,12 +284,12 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
 
             tic = time()
             vol = (rhoh.vector()[:]*areas).sum()
-            # dv = compute_gradient(vol, m)
             t_dcdv.append(time()-tic)
 
             tic = time()
             dv_bar.vector()[:] = filter(H,Hs,areas)
             t_filter.append(time()-tic)
+
             ## Optimizer parameters
             tic = time()
             if optimizer ==0:
@@ -346,7 +344,7 @@ if __name__ == "__main__":
     ## parameters
     volfrac = 0.5
     maxiter = 200
-    N = 50    ## number of elem in patch
+    N = 100    ## number of elem in patch
     hmax = 0.0075
     hmaxC = hmax*2
     rmin = hmax*3

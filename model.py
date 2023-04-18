@@ -34,7 +34,7 @@ class MyGNN(torch.nn.Module):
             self.dropout.append(torch.nn.Dropout(p=dropout))
             self.hidden_act.append(torch.nn.ReLU())
         self.output = pyg.nn.GCNConv(n_hidden, 1)
-        self.output_act = torch.nn.Softplus()
+        self.output_act = torch.nn.ReLU()
         
     def forward(self, x, edge_index):
         x = self.input_act(self.input(x, edge_index))

@@ -79,13 +79,14 @@ def output_assemble(dc, loop, scalers = None,  lb = None, k = 5):
     dc.vector()[:] = box.ravel()
     return dc.vector()[:].reshape(-1,1), scalers, lb
 
-def oc(density,dc,dv,mesh,H,Hs,volfrac):
+def oc(density,dc,dv,mesh,H,Hs,volfrac,areas):
+
     l1 = 0
     l2 = 1e9
     move = 0.2
     while l2 - l1 > 1e-4:
         lmid = 0.5*(l2+l1)
-        density_new = np.maximum(0.0, np.maximum(density.vector()[:] - move, np.minimum(1.0, np.minimum(density.vector()[:] + move, density.vector()[:] * np.sqrt(-dc.vector()[:] / dv.vector()[:] /lmid)))))
-        # xphys = (H@density_new)/Hs
-        l1, l2 = (lmid, l2) if sum(density_new) - volfrac * mesh.num_cells()>0 else (l1, lmid)
-    return density_new
+        phi_new = np.maximum(0.0, np.maximum(density.vector()[:] - move, np.minimum(1.0, np.minimum(density.vector()[:] + move, density.vector()[:] * np.sqrt(-dc.vector()[:] / dv.vector()[:] /lmid)))))
+        rho_new = filter(H,Hs,phi_new)
+        l1, l2 = (lmid, l2) if (rho_new*areas).sum() - volfrac*areas.sum() > 0 else (l1, lmid)
+    return phi_new

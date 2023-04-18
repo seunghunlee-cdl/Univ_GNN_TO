@@ -43,7 +43,7 @@ def calculate_center(mesh):
     return center
 
 def filter(H,Hs,x):
-    return (H@x.vector()[:])/Hs
+    return (H@x)/Hs
 
 def convert_neighors_to_edges(eid, neighbors):
     valid_neighbors = np.setdiff1d(neighbors, -1)
@@ -59,3 +59,12 @@ def convolution_operator(center, rmin):
     H = H + H.T
     H.setdiag(rmin)
     return H
+
+def compute_triangle_area(triangles):
+
+    x1, y1 = triangles[:, 0, 0], triangles[:, 0, 1]
+    x2, y2 = triangles[:, 1, 0], triangles[:, 1, 1]
+    x3, y3 = triangles[:, 2, 0], triangles[:, 2, 1]
+
+    area = 0.5 * np.abs((x1*y2 + x2*y3 + x3*y1) - (y1*x2 + y2*x3 + y3*x1))
+    return area

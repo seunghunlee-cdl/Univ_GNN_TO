@@ -1,3 +1,5 @@
+from time import time
+
 import fenics as fe
 import fenics_adjoint as adj
 import gmsh
@@ -33,6 +35,7 @@ def generate_fenics_mesh(N=None):
 
     # Partition mesh
     if N:
+        tic = time()
         numElements = len(gmsh.model.mesh.getElements(2)[1][0])
         numPartitions = numElements // N
         gmsh.model.mesh.partition(numPartitions)
@@ -44,8 +47,10 @@ def generate_fenics_mesh(N=None):
                 part_info['nodes'].append(np.unique(elementNodeTags[0].ravel().astype(int)) - 1)
                 _, comm, _ = np.intersect1d(elementTags, elementTags_, return_indices=True)
                 part_info['elems'].append(comm)
+        t_part_info = time()-tic
     else:
         part_info = None
+        t_part_info = None
 
     # Generate fenics mesh from gmsh
     mesh_out = meshio.Mesh(
@@ -58,7 +63,7 @@ def generate_fenics_mesh(N=None):
     with fe.XDMFFile(TEMP_MESH_PATH) as file:
         file.read(mesh)
 
-    return mesh, part_info
+    return mesh, part_info, t_part_info
 
 def get_clever2d_mesh(L=2, H=1, hmax=0.1, N=None):
     # Initialize
@@ -87,7 +92,7 @@ def get_clever2d_mesh(L=2, H=1, hmax=0.1, N=None):
     gmsh.model.geo.addPlaneSurface([1], 1)
     
     # Convert gmsh to fenics mesh
-    mesh, part_info = generate_fenics_mesh(N)
+    mesh, part_info, t_part_info = generate_fenics_mesh(N)
     gmsh.finalize()
 
     # Function spaces
@@ -125,7 +130,7 @@ def get_clever2d_mesh(L=2, H=1, hmax=0.1, N=None):
     t = adj.Constant((0.0, -1.0))
     ds = fe.Measure("ds")(mesh, subdomain_data=boundaries)
 
-    return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info
+    return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info
     
 
 def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
@@ -155,7 +160,7 @@ def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
     gmsh.model.mesh.generate(2)
     
     # Convert gmsh to fenics mesh
-    mesh, part_info = generate_fenics_mesh(N)
+    mesh, part_info,t_part_info = generate_fenics_mesh(N)
 
     gmsh.finalize()
 
@@ -199,7 +204,7 @@ def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
     tracBd.mark(boundaries, 2)
     t = adj.Constant((0.0, -1.0))
     ds = fe.Measure("ds")(mesh, subdomain_data=boundaries)
-    return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info
+    return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info
 
 def get_wrench2d_mesh(L: float = 2, R1: float = 0.5, R2: float = 0.3, r1: float = 0.3, r2: float = 0.175, hmax: float = 0.1, N = None):
     # Initialize

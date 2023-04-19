@@ -46,8 +46,13 @@ def input_assemble(T, rhoh, uhC, V, F, FC, v2dC, center, scaler=None):
     eC = epsilon(uhC)
     e_mapped = np.zeros((F.mesh().num_cells(), 3))
 
+    # uhbar = adj.interpolate(uhC,V)
+    # strain = epsilon(uhbar)
+    # for i in range(3):
+    #     e_mapped[:,i]=adj.project(strain[i],F).vector()[:]
+
     for i in range(3):
-        coarse_node2fine_cell = LinearTriInterpolator(T, adj.project(eC[i], FC).vector()[:])
+        coarse_node2fine_cell = LinearTriInterpolator(T, adj.project(eC[i], FC).vector()[v2dC])
         e_mapped[:, i] = coarse_node2fine_cell(*center.T).data
 
     if scaler is None:

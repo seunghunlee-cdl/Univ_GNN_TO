@@ -49,7 +49,7 @@ def input_assemble(T, rhoh, uhC, V, F, FC, v2dC, center, scaler=None):
     # uhbar = adj.interpolate(uhC,V)
     # strain = epsilon(uhbar)
     # for i in range(3):
-    #     e_mapped[:,i]=adj.project(strain[i],F).vector()[:]
+        # e_mapped[:,i]=adj.project(strain[i],F).vector()[:]
 
     for i in range(3):
         coarse_node2fine_cell = LinearTriInterpolator(T, adj.project(eC[i], FC).vector()[v2dC])

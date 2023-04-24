@@ -17,7 +17,7 @@ from torch_geometric.data import Data
 
 from fem import (build_weakform_filter, build_weakform_struct, epsilon,
                  input_assemble, oc, output_assemble, sigma)
-from mesh import (get_clever2d_mesh, get_dof_map, get_mbb2d_mesh,
+from mesh import (get_clever2d_mesh, get_dof_map, get_lshape2d, get_mbb2d_mesh,
                   get_wrench2d_mesh, halfcircle2d)
 from MMA import mmasub
 from model import (MyGNN, generate_data, graph_partitioning, pred_input,
@@ -45,7 +45,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     t_pred=[]
     t_optimizer=[]
     t_mesh = []
-    t_fenics = []
     input_apd=[]
     output_apd=[]
 
@@ -57,7 +56,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
 
     print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
 
-    tic = time()
     v2dC, d2vC = get_dof_map(FC)
     
     coords = mesh.coordinates()
@@ -107,7 +105,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     uhC = Function(VC)
     rhohC = Function(FC)
     aC, LC = build_weakform_struct(uC, duC, rhohC, tC, dsC, penal) #### FEA-coarse
-    t_fenics.append(time()-tic)
 
     tic = time()
     partitioned_graphs = graph_partitioning(coords, trias, part_info, center)
@@ -168,10 +165,10 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     while loop < maxiter:
         rhoh.assign(phih)
         rhoh.vector()[:] = filter(H,Hs,rhoh.vector()[:])
-
-        # map_density(rhoh, rhohC, mesh, meshC, None, v2dC)
+        # rhohC = project(rhoh,FC)
+        map_density(rhoh, rhohC, mesh, meshC, None, v2dC)
         tic = time()
-        rhohC.vector()[v2dC] = rhoh.vector()[fcc2cn] ## density mapping
+        # rhohC.vector()[v2dC] = rhoh.vector()[fcc2cn] ## density mapping
         t_overhead.append(time()-tic)
 
         tic = time()
@@ -251,6 +248,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         else:
             tic = time()
             pred_input_data = [pred_input(x_last, edge_ids, elem_ids, mesh) for edge_ids, elem_ids in zip(partitioned_graphs, part_info['elems'])]
+            # pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = len(pred_input_data))
             pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = len(pred_input_data))
             t_data.append(time()-tic)
 
@@ -301,12 +299,20 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         loop += 1
         print(f"it.: {loop: 3d},\tobj.: {comp:.4e},\tvol.: {vol/areas.sum():.3f}")
     t_end = time()-t_start
+
+    rhoh.assign(phih)
+    rhoh.vector()[:] = filter(H,Hs,rhoh.vector()[:])
+    a, L = build_weakform_struct(u, du, rhoh, t, ds, penal)
+    solve(a == L, uh, bcs=bcs,solver_parameters={'linear_solver':'mumps'})  ## fine
+    Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
+    comp = assemble(Ws*dx)
+
     plot(rhoh, cmap = "gray_r")
     plt.savefig("test"+'.png')
 
-    print("total :", np.round(t_end))
+    # print("total time:", np.round(t_end), "final comp :", comp)
+    print(f"total time.: {t_end:.4e},\tfinal comp.: {comp:.4e}")
     print("mesh :", np.round(sum(t_mesh)))
-    print("fenics preparation :", np.round(sum(t_fenics)))
     print("data :", np.round(sum(t_data)))
     print("fine :", np.round(sum(t_fine)), ",call :", len(t_fine), ",once :", np.round(sum(t_fine)/len(t_fine),3))
     print("coarse :", np.round(sum(t_coarse)), ",call :", len(t_coarse), ",once :", np.round(sum(t_coarse)/len(t_coarse),3))
@@ -320,21 +326,22 @@ if __name__ == "__main__":
     ## parameters
     volfrac = 0.5
     maxiter = 200
-    N = 200    ## number of elem in patch
-    hmax = 0.0024
-    hmaxC = hmax*6
+    N = 1000    ## number of elem in patch
+    hmax = 0.02
+    # hmax = 0.01
+    hmaxC = hmax*3
     rmin = hmax*3
-    Ni = 1
+    Ni = 5
     Nf = 10
     Wi = 10
     Wu = 5
     target_step_per_epoch = 15
     epochs = 3
-    n_hidden = 128
+    n_hidden = 256
     n_layer = 4
     lr = 0.0005
     optimizer = 1   ####   0 --> MMA,   1 --> OC
-    continuation = True
+    continuation = False
     torch.manual_seed(42)
     random.seed(42)
     np.random.seed(42)

@@ -97,7 +97,7 @@ def get_clever2d_mesh(L=2, H=1, hmax=0.1, N=None):
 
     # Function spaces
     if N:
-        V = fe.VectorFunctionSpace(mesh,"DG", 0)
+        V = fe.VectorFunctionSpace(mesh,"CG", 1)
         F = fe.FunctionSpace(mesh,"DG", 0)
     else:
         V = fe.VectorFunctionSpace(mesh, "CG", 1)
@@ -199,7 +199,7 @@ def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
     # Traction boundary
     class TracBd(fe.SubDomain):
         def inside(self, x, on_boundary):
-            return (fe.near(x[1], H) and x[0] <= 0.05)
+            return (fe.near(x[1], H) and x[0] <= hmax*1.5)
     tracBd = TracBd()
     tracBd.mark(boundaries, 2)
     t = adj.Constant((0.0, -1.0))
@@ -247,13 +247,19 @@ def get_wrench2d_mesh(L: float = 2, R1: float = 0.5, R2: float = 0.3, r1: float 
     gmsh.model.geo.addPlaneSurface([3, 1, 2], 1)
 
     # Convert gmsh to fenics mesh
-    mesh, part_info = generate_fenics_mesh(N)
+    mesh, part_info,t_part_info = generate_fenics_mesh(N)
     gmsh.finalize()
 
-    V = fe.VectorFunctionSpace(mesh, "CG", 1)
+    if N:
+        V = fe.VectorFunctionSpace(mesh,"CG", 1)
+        F = fe.FunctionSpace(mesh,"DG", 0)
+    else:
+        V = fe.VectorFunctionSpace(mesh, "CG", 1)
+        F = fe.FunctionSpace(mesh, "CG", 1)
+
     u = fe.TrialFunction(V)
     du = fe.TestFunction(V)
-    F = fe.FunctionSpace(mesh, "CG", 1)
+
     rho = fe.TrialFunction(F)
     drho = fe.TestFunction(F)
 
@@ -277,7 +283,74 @@ def get_wrench2d_mesh(L: float = 2, R1: float = 0.5, R2: float = 0.3, r1: float 
 
     t = adj.Constant((0.0, -1.0))
     ds = fe.Measure("ds")(mesh, subdomain_data=boundaries)
-    return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info
+    return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info,t_part_info
+
+def get_lshape2d(L = 2, H = 2, hmax = 0.1, N =None):
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Verbosity", 0)
+    gmsh.model.add('lshape')
+
+    #add points
+    gmsh.model.geo.addPoint(0, 0, 0, hmax, 1)
+    gmsh.model.geo.addPoint(L, 0, 0, hmax, 2)
+    gmsh.model.geo.addPoint(L, 1, 0, hmax, 3)
+    gmsh.model.geo.addPoint(1, 1, 0, hmax, 4)
+    gmsh.model.geo.addPoint(1, H, 0, hmax, 5)
+    gmsh.model.geo.addPoint(0, H, 0, hmax, 6)
+
+    #add lines
+    gmsh.model.geo.addLine(1, 2, 1)
+    gmsh.model.geo.addLine(2, 3, 2)
+    gmsh.model.geo.addLine(3, 4, 3)
+    gmsh.model.geo.addLine(4, 5, 4)
+    gmsh.model.geo.addLine(5, 6, 5)
+    gmsh.model.geo.addLine(6, 1, 6)
+
+    #add surface
+    gmsh.model.geo.addCurveLoop([1,2,3,4,5,6], 1)
+    gmsh.model.geo.addPlaneSurface([1], 1)
+
+    #synchronize
+    gmsh.model.geo.synchronize()
+    gmsh.model.mesh.generate(2)
+
+    mesh, part_info,t_part_info = generate_fenics_mesh(N)
+    gmsh.finalize()
+
+    if N:
+        V = fe.VectorFunctionSpace(mesh,"CG", 1)
+        F = fe.FunctionSpace(mesh,"DG", 0)
+    else:
+        V = fe.VectorFunctionSpace(mesh, "CG", 1)
+        F = fe.FunctionSpace(mesh, "CG", 1)
+
+    u = fe.TrialFunction(V)
+    du = fe.TestFunction(V)
+
+    rho = fe.TrialFunction(F)
+    drho = fe.TestFunction(F)
+
+    boundaries = fe.MeshFunction("size_t", mesh, mesh.topology().dim() - 1)
+    boundaries.set_all(0)
+
+    #dirichlet boundary
+    class DirBd(fe.SubDomain):
+        def inside(self, x, on_boundary):
+            return(fe.near(x[1], 2.0) and on_boundary)
+    dirBd = DirBd()
+    dirBd.mark(boundaries, 1)
+    bcs = [adj.DirichletBC(V, (0.0, 0.0), dirBd)]
+
+    #traction boundary
+    class TracBd(fe.SubDomain):
+        def inside(self, x, on_boundary):
+            # return((fe.near(x[0], L) and (fe.near(x[1], 1))) and on_boundary)
+            return (fe.near(x[1], 1) and x[0] >= 2-hmax)
+    tracBd = TracBd()
+    tracBd.mark(boundaries, 2)
+    t = adj.Constant((0.0, -1.0))
+    ds = fe.Measure("ds")(mesh, subdomain_data=boundaries)
+    return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info
 
 def halfcircle2d(R= 1, alpha= 0.1, hmax= 0.1, N= None):
     gmsh.initialize()

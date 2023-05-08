@@ -6,10 +6,11 @@ from time import time
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 import numpy as np
+import pandas as pd
 import torch
 import torch_geometric as pyg
-from fenics import (XDMFFile, as_backend_type, dx, grad, inner, parameters,
-                    plot, set_log_active)
+from fenics import (FunctionSpace, XDMFFile, as_backend_type, dx, grad, inner,
+                    parameters, plot, set_log_active)
 from fenics_adjoint import (Constant, Control, Function, assemble,
                             compute_gradient, interpolate, project, solve)
 from matplotlib.tri import Triangulation
@@ -17,13 +18,15 @@ from torch_geometric.data import Data
 
 from fem import (build_weakform_filter, build_weakform_struct, epsilon,
                  input_assemble, oc, output_assemble, sigma)
-from mesh import (get_clever2d_mesh, get_dof_map, get_lshape2d, get_mbb2d_mesh,
-                  get_wrench2d_mesh, halfcircle2d)
+from mesh import (get_clever2d_mesh, get_clever3d_mesh, get_dof_map,
+                  get_halfcircle2d_mesh, get_lshape2d_mesh, get_mbb2d_mesh,
+                  get_mbb3d_mesh, get_wrench2d_mesh)
 from MMA import mmasub
 from model import (MyGNN, generate_data, graph_partitioning, pred_input,
                    training)
-from utils import (compute_theta_error, compute_triangle_area,
-                   convolution_operator, filter, map_density, tree_maker)
+from utils import (compute_tetra_area, compute_theta_error,
+                   compute_triangle_area, convolution_operator, filter,
+                   map_density, tree_maker)
 
 set_log_active(False)
 torch.cuda.empty_cache()
@@ -49,21 +52,25 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     output_apd=[]
 
     tic = time()
-    mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info = get_mbb2d_mesh(hmax=hmax, N=N)
-    meshC, VC, FC, bcsC, tC, dsC, uC, duC, _, _, _ , _= get_mbb2d_mesh(hmax = hmaxC)
+    mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info = get_clever3d_mesh(hmax=hmax, N=N)
+    meshC, VC, FC, bcsC, tC, dsC, uC, duC, _, _, _ , _= get_clever3d_mesh(hmax = hmaxC)
     t_mesh.append(time()-tic-t_part_info)
     t_overhead.append(t_part_info)
 
     print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
 
     v2dC, d2vC = get_dof_map(FC)
-    
+    dim = u.ufl_shape[0]
     coords = mesh.coordinates()
+    coordsC = meshC.coordinates()
     trias = mesh.cells()
     center = coords[trias].mean(1)
-    areas = compute_triangle_area(coords[trias])
+    if dim == 2:
+        areas = compute_triangle_area(coords[trias])
+    else:
+        areas = compute_tetra_area(coords[trias])
 
-    if continuation == True:
+    if continuation:
         penal = Constant(1.0)
     else:
         penal = Constant(3.0)
@@ -80,7 +87,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     dv_bar = Function(F)
     dc_pred_bar = Function(F)
     
-    rhoh = Function(F)   ## Filtered density
+    rhoh = Function(F, name='density')   ## Filtered density
     m = Control(phih)
 
     ## MMA parameters
@@ -100,15 +107,16 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         d = np.zeros((mm,1))
         move = 0.2
 
-    aH, LH = build_weakform_filter(rho, drho, phih, rmin) #### filter equation
+    # aH, LH = build_weakform_filter(rho, drho, phih, rmin) #### filter equation
     a, L = build_weakform_struct(u, du, rhoh, t, ds, penal) #### FEA-fine
     uhC = Function(VC)
     rhohC = Function(FC)
     aC, LC = build_weakform_struct(uC, duC, rhohC, tC, dsC, penal) #### FEA-coarse
 
     tic = time()
-    partitioned_graphs = graph_partitioning(coords, trias, part_info, center)
-    T = Triangulation(*meshC.coordinates().T, triangles=meshC.cells())
+    partitioned_graphs = graph_partitioning(coords, trias, part_info, center, mesh)
+    if dim == 2:
+        T = Triangulation(*meshC.coordinates().T, triangles=meshC.cells())
     batch_size = np.ceil(len(part_info['nodes'])/target_step_per_epoch).astype(int).item()
     fcc2cn = tree_maker(center, meshC)
     t_overhead.append(time()-tic)
@@ -176,7 +184,10 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         t_coarse.append(time()-tic)
 
         tic = time()
-        x, scaler = input_assemble(T, rhoh, uhC, V, F, FC, v2dC, center, scaler if loop > 0 else None)
+        if dim == 2:
+            x, scaler = input_assemble(rhoh, uhC, V, F, FC, v2dC, center, _, T, scaler if loop > 0 else None)
+        else:
+            x, scaler = input_assemble(rhoh, uhC, V, F, FC, v2dC, center,coordsC, _, scaler if loop > 0 else None)
         x_last = x  
         input_apd.append(x)
         t_data.append(time()-tic)
@@ -184,6 +195,11 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         if(loop<Ni+Wi) or (divmod(max(loop-Ni-Wi,1),Nf)[1]==0):
             tic = time()
             solve(a == L, uh, bcs=bcs)  ## fine
+            XDMFFile("uh.xdmf").write(uh)
+            XDMFFile("uhC.xdmf").write(uhC)
+            tmp = Function(V)
+            tmp.vector()[:] = assemble(L).get_local()
+            XDMFFile("load.xdmf").write(tmp)
 
             Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
             comp = assemble(Ws*dx)
@@ -198,7 +214,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             tic = time()
             y, scalers, lb = output_assemble(
                 dc, loop, scalers if loop > 0 else None, lb if loop > 0 else None,
-                k=2)
+                k=3)
             output_apd.append(y)
             t_data.append(time()-tic)
 
@@ -307,8 +323,19 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
     comp = assemble(Ws*dx)
 
-    plot(rhoh, cmap = "gray_r")
-    plt.savefig("test"+'.png')
+    if dim == 2:
+        plot(rhoh, cmap = "gray_r")
+        plt.savefig("test"+'.png')
+    else:
+        XDMFFile("/workspace/results/displacement.xdmf").write(uh)
+        XDMFFile("/workspace/results/sensitivity.xdmf").write(dc)
+        XDMFFile("/workspace/results/density.xdmf").write(rhoh)
+        den = pd.DataFrame(rhoh.vector()[:], columns = ['rhoh'])
+        den.to_csv("/workspace/results/density.csv", index = False)
+        cord = pd.DataFrame(coords[:,0], columns = ['x'])
+        cord['y'] = coords[:,1]
+        cord['z'] = coords[:,2]
+        cord.to_csv("/workspace/results/coords.csv", index = False)
 
     # print("total time:", np.round(t_end), "final comp :", comp)
     print(f"total time.: {t_end:.4e},\tfinal comp.: {comp:.4e}")
@@ -324,14 +351,13 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
 
 if __name__ == "__main__":
     ## parameters
-    volfrac = 0.5
+    volfrac = 0.12
     maxiter = 200
     N = 1000    ## number of elem in patch
-    hmax = 0.02
-    # hmax = 0.01
+    hmax = 0.05
     hmaxC = hmax*3
-    rmin = hmax*3
-    Ni = 5
+    rmin = hmax*2
+    Ni = 10
     Nf = 10
     Wi = 10
     Wu = 5
@@ -339,7 +365,7 @@ if __name__ == "__main__":
     epochs = 3
     n_hidden = 256
     n_layer = 4
-    lr = 0.0005
+    lr = 0.005
     optimizer = 1   ####   0 --> MMA,   1 --> OC
     continuation = False
     torch.manual_seed(42)

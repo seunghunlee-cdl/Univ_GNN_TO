@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 import numpy as np
 from fenics_adjoint import Constant
 from matplotlib.tri import Triangulation
@@ -67,7 +69,43 @@ def compute_triangle_area(triangles):
     area = 0.5 * np.abs((x1*y2 + x2*y3 + x3*y1) - (y1*x2 + y2*x3 + y3*x1))
     return area
 
+def compute_tetra_area(tetra):
+    x1, y1, z1 = tetra[:, 0, 0], tetra[:, 0, 1], tetra[:, 0, 2]
+    x2, y2, z2 = tetra[:, 1, 0], tetra[:, 1, 1], tetra[:, 1, 2]
+    x3, y3, z3 = tetra[:, 2, 0], tetra[:, 2, 1], tetra[:, 2, 2]
+    x4, y4, z4 = tetra[:, 3, 0], tetra[:, 3, 1], tetra[:, 3, 2]
+    area = abs((1/6) * ((x2-x1)*(y3-y1)*(z4-z1) + (y2-y1)*(z3-z1)*(x4-x1) + (z2-z1)*(x3-x1)*(y4-y1) - (z2-z1)*(y3-y1)*(x4-x1) - (y2-y1)*(x3-x1)*(z4-z1) - (x2-x1)*(z3-z1)*(y4-y1)))
+    return area
+
 def tree_maker(center, meshC):
     tree = cKDTree(center)
     _, fcc2cn = tree.query(meshC.coordinates())
     return fcc2cn
+
+def find_adjacent_tetrahedra(mesh):
+    tdim = mesh.topology().dim()  # Topological dimension (3 for tetrahedra)
+    mesh.init(tdim, tdim - 1)  # Initialize connectivity between cells and faces
+    mesh.init(tdim - 1, tdim)  # Initialize connectivity between faces and cells
+    num_cells = mesh.num_cells()
+    adjacent_tetrahedra = defaultdict(set)
+
+    for ci in range(num_cells):
+        cell_faces = mesh.topology()(tdim, tdim - 1)(ci)  # Get the faces of the current cell
+        for face_index in cell_faces:
+            neighbors = mesh.topology()(tdim - 1, tdim)(face_index)  # Get the neighbors of the current face
+            for neighbor in neighbors:
+                if neighbor != ci:  # Exclude the current tetrahedron
+                    adjacent_tetrahedra[ci].add(neighbor)
+
+    return adjacent_tetrahedra
+
+def create_adjacent_tetrahedra_matrix(adjacent_tetrahedra):
+    num_tetrahedra = len(adjacent_tetrahedra)
+    max_adjacents = max(len(adj_set) for adj_set in adjacent_tetrahedra.values())
+    
+    matrix = -np.ones((num_tetrahedra, max_adjacents), dtype=int)
+
+    for tetrahedron_index, adj_set in adjacent_tetrahedra.items():
+        matrix[tetrahedron_index, :len(adj_set)] = list(adj_set)
+
+    return matrix

@@ -8,7 +8,8 @@ from torch_geometric.data import Data
 from torch_geometric.utils import subgraph
 from tqdm.auto import tqdm
 
-from utils import convert_neighors_to_edges
+from utils import (convert_neighors_to_edges,
+                   create_adjacent_tetrahedra_matrix, find_adjacent_tetrahedra)
 
 
 def generate_data(x, y, edge_ids, elem_ids, mesh):
@@ -26,17 +27,16 @@ class MyGNN(torch.nn.Module):
         super().__init__()
         
         self.input = pyg.nn.GCNConv(n_input, n_hidden)
-        self.input_act = torch.nn.ReLU()
-
+        self.input_act = torch.nn.LeakyReLU()
         self.dropout = torch.nn.ModuleList()
         self.hidden = torch.nn.ModuleList()
         self.hidden_act = torch.nn.ModuleList()
         for _ in range(n_layer):
             self.hidden.append(pyg.nn.GCNConv(n_hidden, n_hidden))
             self.dropout.append(torch.nn.Dropout(p=dropout))
-            self.hidden_act.append(torch.nn.ReLU())
+            self.hidden_act.append(torch.nn.LeakyReLU())
         self.output = pyg.nn.GCNConv(n_hidden, 1)
-        self.output_act = torch.nn.ReLU()
+        self.output_act = torch.nn.LeakyReLU()
         
     def forward(self, x, edge_index):
         x = self.input_act(self.input(x, edge_index))
@@ -44,6 +44,7 @@ class MyGNN(torch.nn.Module):
             x = layer(x, edge_index) + x
             x = drop(x)
             x = act(x)
+        # return self.output(x,edge_index)
         x = self.output_act(self.output(x, edge_index))
         return -x
     
@@ -56,7 +57,7 @@ def training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net=Non
     train_loader = pyg.loader.DataLoader(train_dataset, batch_size = batch_size)
     validation_loader = pyg.loader.DataLoader(validation_dataset, batch_size = batch_size)
     if net is None:
-        net = MyGNN(4, n_hidden, n_layer, 0.5).to(device)
+        net = MyGNN(dataset[0]['x'].shape[1], n_hidden, n_layer, 0.9).to(device)
     optim = torch.optim.Adam(net.parameters(), lr=lr)
     criterion = torch.nn.L1Loss()
     # criterion = torch.nn.MSELoss()
@@ -99,9 +100,14 @@ def partition_graph(subset, data):
         edge_index=dummy[edge_index_]
     )
 
-def graph_partitioning(coords, trias, part_info, center):
-    T = Triangulation(*coords.T, triangles=trias)
-    edge_index = np.concatenate([convert_neighors_to_edges(eid, neighbors) for eid, neighbors in enumerate(T.neighbors)]).T
+def graph_partitioning(coords, trias, part_info, center, mesh):
+    if coords.shape[1] == 2:
+        T = Triangulation(*coords.T, triangles=trias)
+        edge_index = np.concatenate([convert_neighors_to_edges(eid, neighbors) for eid, neighbors in enumerate(T.neighbors)]).T
+    else:
+        adjacent_tetrahedra = find_adjacent_tetrahedra(mesh)
+        edge = create_adjacent_tetrahedra_matrix(adjacent_tetrahedra)
+        edge_index = np.concatenate([convert_neighors_to_edges(eid, neighbors) for eid, neighbors in enumerate(edge)]).T
     global_graph = Data(
         x=torch.tensor(center), 
         edge_index=torch.tensor(edge_index, dtype=torch.long)

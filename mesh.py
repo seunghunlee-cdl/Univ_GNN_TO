@@ -64,6 +64,45 @@ def generate_fenics_mesh(N=None):
         file.read(mesh)
 
     return mesh, part_info, t_part_info
+def generate_fenics_mesh_3d(N=None):
+    gmsh.model.geo.synchronize()
+    
+    gmsh.model.addPhysicalGroup(3, list(range(1, gmsh.model.geo.getMaxTag(3)+1)), 1, name='domain')
+    gmsh.model.mesh.generate(3)
+    ndim = gmsh.model.getDimension()
+    idx, coords, _ = gmsh.model.mesh.getNodes()
+    coords = coords.reshape(-1,3)[:, :ndim]
+    # _, tag = gmsh.model.getPhysicalGroups(ndim)[0]
+    _, elementTags, elems = map(lambda x: x[0], gmsh.model.mesh.getElements(ndim))
+    elems = elems.reshape(-1,ndim+1) -1
+    max_node_idx = elems.ravel().max()
+    coords = coords[idx-1 <= max_node_idx]
+    if N:
+        tic = time()
+        numElements = len(gmsh.model.mesh.getElements(3)[1][0])
+        numPartitions = numElements // N
+        gmsh.model.mesh.partition(numPartitions)
+        part_info = {'nodes': [], 'elems': []}
+        for _, tag in gmsh.model.getEntities(ndim):
+            _, elementTags_, elementNodeTags = gmsh.model.mesh.getElements(ndim,tag)
+            if len(elementTags_):
+                part_info['nodes'].append(np.unique(elementNodeTags[0].ravel().astype(int)) - 1)
+                _, comm, _ = np.intersect1d(elementTags, elementTags_, return_indices=True)
+                part_info['elems'].append(comm)
+        t_part_info = time()-tic
+    else:
+        part_info = None
+        t_part_info = None
+    
+    mesh_out = meshio.Mesh(
+        points = coords,
+        cells = {"tetra": elems}
+    )
+    meshio.write(TEMP_MESH_PATH, mesh_out)
+    mesh = adj.Mesh()
+    with fe.XDMFFile(TEMP_MESH_PATH) as file:
+        file.read(mesh)
+    return mesh, part_info, t_part_info
 
 def get_clever2d_mesh(L=2, H=1, hmax=0.1, N=None):
     # Initialize
@@ -132,7 +171,80 @@ def get_clever2d_mesh(L=2, H=1, hmax=0.1, N=None):
 
     return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info
     
+def get_clever3d_mesh(L = 2, H = 1, W = 1, hmax = 0.1, N=None):
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Verbosity", 0)
+    gmsh.model.add('mbb3d')
+    gmsh.model.occ.addBox(0, 0, 0, L, H, W/2)
+    
+    gmsh.model.occ.synchronize()
+    gmsh.model.mesh.setSize(gmsh.model.getEntities(0), hmax)
+ 
+    # gmsh.model.geo.addPoint(0, 0, 0, hmax, 1)
+    # gmsh.model.geo.addPoint(L, 0, 0, hmax, 2)
+    # gmsh.model.geo.addPoint(L, 0, W/2, hmax, 3)
+    # gmsh.model.geo.addPoint(0, 0, W/2, hmax, 4)
 
+    # gmsh.model.geo.addLine(1, 2, 1)
+    # gmsh.model.geo.addLine(2, 3, 2)
+    # gmsh.model.geo.addLine(3, 4, 3)
+    # gmsh.model.geo.addLine(4, 1, 4)
+
+    # gmsh.model.geo.addCurveLoop([1, 2, 3, 4], 1)
+    # gmsh.model.geo.addPlaneSurface([1], 1)
+
+    # gmsh.model.geo.extrude([(2, 1)], 0, -H/20, 0)
+    # gmsh.model.geo.extrude([(2, 1)], 0, H - H/20, 0)
+    
+    mesh, part_info, t_part_info = generate_fenics_mesh_3d(N)
+    gmsh.write("mtest.msh")
+    gmsh.finalize()
+    
+
+    if N:
+        V = fe.VectorFunctionSpace(mesh, "CG", 1)
+        F = fe.FunctionSpace(mesh, "DG", 0)
+    else:
+        V = fe.VectorFunctionSpace(mesh, "CG", 1)
+        F = fe.FunctionSpace(mesh, "CG", 1)
+    
+    u = fe.TrialFunction(V)
+    du = fe.TestFunction(V)
+
+    rho = fe.TrialFunction(F)
+    drho = fe.TestFunction(F)
+
+    boundaries = fe.MeshFunction("size_t", mesh, mesh.topology().dim() - 1)
+    boundaries.set_all(0)
+    edge_function = fe.MeshFunction("size_t", mesh, mesh.topology().dim() -2, 0)
+    # edge_function.set_all(0)
+
+    tol = 1E-14
+    class DirBdSupp(fe.SubDomain):
+        def inside(self, x, on_boundary):
+            return fe.near(x[0],0.0) and on_boundary
+    class DirBdSym(fe.SubDomain):
+        def inside(self, x, on_boundary):
+            return fe.near(x[2],0.0) and on_boundary
+    # bcs = [adj.DirichletBC(V, adj.Constant((0.0,0.0,0.0)), dirBd)]
+    dirBdSupp, dirBdSym = [DirBdSupp(), DirBdSym()]
+    bdsupp = adj.DirichletBC(V, adj.Constant((0.0, 0.0, 0.0)), dirBdSupp)
+    bdsym = adj.DirichletBC(V.sub(2), 0.0, dirBdSym)
+    bcs = [bdsupp, bdsym]
+    class TracBd(fe.SubDomain):
+        def inside(self, x, on_boundary):
+            # return ((x[0] <= L) and (x[0] >= L-hmax*1.5) and (x[1] >= -tol) and (x[1] <= tol) and (x[2] > tol) and (x[2] < 0.5-tol) and on_boundary)
+             return ((x[0] <= L) and (x[0] >= L-hmax*1.5) and (x[1] >= -tol) and (x[1] <= tol) and on_boundary)
+            # return (x[0]>(L-tol)) and (x[1]<=tol) and on_boundary
+            # return fe.near(x[0],L) and fe.near(x[1],0) and on_boundary
+
+    # tracBd = TracBd()
+    # tracBd.mark(edge_function,2)
+    TracBd().mark(boundaries, 2)
+    t = adj.Constant((0.0,-1.0,0.0))
+    ds = fe.Measure("ds")(mesh, subdomain_data=boundaries)
+    
+    return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info
 def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
     # Initialize
     gmsh.initialize()
@@ -205,7 +317,80 @@ def get_mbb2d_mesh(L=3, H=1, hmax=0.1, N=None):
     t = adj.Constant((0.0, -1.0))
     ds = fe.Measure("ds")(mesh, subdomain_data=boundaries)
     return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info
+def get_mbb3d_mesh(L=3, H=1, Z=1, hmax=0.1, N=None):
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Verbosity", 0)
+    gmsh.model.add('mbb3d')
 
+    # add points
+    gmsh.model.geo.addPoint(0, 0, 0, hmax, 1)
+    gmsh.model.geo.addPoint(L, 0, 0, hmax, 2)
+    gmsh.model.geo.addPoint(L, H, 0, hmax, 3)
+    gmsh.model.geo.addPoint(0, H, 0, hmax, 4)
+    gmsh.model.geo.addPoint(0, H, Z, hmax, 5)
+    gmsh.model.geo.addPoint(0, 0, Z, hmax, 6)
+    gmsh.model.geo.addPoint(L, 0, Z, hmax, 7)
+    gmsh.model.geo.addPoint(L, H, Z, hmax, 8)
+
+    # add lines
+    gmsh.model.geo.addLine(1,2,1)
+    gmsh.model.geo.addLine(2,3,2)
+    gmsh.model.geo.addLine(3,4,3)
+    gmsh.model.geo.addLine(4,1,4)
+    
+    gmsh.model.geo.addLine(5,6,5)
+    gmsh.model.geo.addLine(6,7,6)
+    gmsh.model.geo.addLine(7,8,7)
+    gmsh.model.geo.addLine(8,5,8)
+
+    gmsh.model.geo.addLine(4,5,9)
+    gmsh.model.geo.addLine(6,1,10)
+    gmsh.model.geo.addLine(7,2,11)
+    gmsh.model.geo.addLine(3,8,12)
+
+    # add surface
+    gmsh.model.geo.addCurveLoop([1,2,3,4],1)
+    gmsh.model.geo.addCurveLoop([5,6,7,8],2)
+    gmsh.model.geo.addCurveLoop([9,5,10,-4],3)
+    gmsh.model.geo.addCurveLoop([9,-8,-12,3],4)
+    gmsh.model.geo.addCurveLoop([6,11,-1,-10],5)
+    gmsh.model.geo.addCurveLoop([11,2,12,-7],6)
+    
+    gmsh.model.geo.addSurfaceFilling([1],1)
+    gmsh.model.geo.addSurfaceFilling([2],2)
+    gmsh.model.geo.addSurfaceFilling([3],3)
+    gmsh.model.geo.addSurfaceFilling([4],4)
+    gmsh.model.geo.addSurfaceFilling([5],5)
+    gmsh.model.geo.addSurfaceFilling([6],6)
+
+    gmsh.model.geo.addSurfaceLoop([1,2,3,4,5,6],1)
+    gmsh.model.geo.addVolume([1])
+    mesh, part_info, t_part_info = generate_fenics_mesh_3d(N)
+    gmsh.finalize()
+
+    if N:
+        V = fe.VectorFunctionSpace(mesh, "CG", 1)
+        F = fe.FunctionSpace(mesh, "DG", 0)
+    else:
+        V = fe.VectorFunctionSpace(mesh, "CG", 1)
+        F = fe.FunctionSpace(mesh, "DG", 0)
+    
+    u = fe.TrialFunction(V)
+    du = fe.TestFunction(V)
+
+    rho = fe.TrialFunction(F)
+    drho = fe.TestFunction(F)
+
+    boundaries = fe.MeshFunction("size_t", mesh, mesh.topology().dim() - 1)
+    boundaries.set_all(0)
+
+    # class DirBdSym(fe.SubDomain):
+    #     def inside(self, x, on_boundary):
+    #         return fe.near(x[0], 0.0)
+    # class DirBdSupp(fe.SubDomain):
+    #     def inside(self, x, on_boundary):
+    #         return fe.near(x[2], 0.0)
+    # cla
 def get_wrench2d_mesh(L: float = 2, R1: float = 0.5, R2: float = 0.3, r1: float = 0.3, r2: float = 0.175, hmax: float = 0.1, N = None):
     # Initialize
     gmsh.initialize()
@@ -285,7 +470,7 @@ def get_wrench2d_mesh(L: float = 2, R1: float = 0.5, R2: float = 0.3, r1: float 
     ds = fe.Measure("ds")(mesh, subdomain_data=boundaries)
     return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info,t_part_info
 
-def get_lshape2d(L = 2, H = 2, hmax = 0.1, N =None):
+def get_lshape2d_mesh(L = 2, H = 2, hmax = 0.1, N =None):
     gmsh.initialize()
     gmsh.option.setNumber("General.Verbosity", 0)
     gmsh.model.add('lshape')
@@ -352,7 +537,7 @@ def get_lshape2d(L = 2, H = 2, hmax = 0.1, N =None):
     ds = fe.Measure("ds")(mesh, subdomain_data=boundaries)
     return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info
 
-def halfcircle2d(R= 1, alpha= 0.1, hmax= 0.1, N= None):
+def get_halfcircle2d_mesh(R= 1, alpha= 0.1, hmax= 0.1, N= None):
     gmsh.initialize()
     gmsh.option.setNumber("General.Verbosity", 0)
     gmsh.model.add('halfcircle2d')

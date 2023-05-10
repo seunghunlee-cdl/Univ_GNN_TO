@@ -1,6 +1,7 @@
 import os
 import random
 import shutil
+import sys
 from time import time
 
 import matplotlib.pyplot as plt
@@ -9,10 +10,12 @@ import numpy as np
 import pandas as pd
 import torch
 import torch_geometric as pyg
-from fenics import (FunctionSpace, XDMFFile, as_backend_type, dx, grad, inner,
-                    parameters, plot, set_log_active)
+from fenics import (FunctionSpace, XDMFFile, as_backend_type,
+                    dof_to_vertex_map, dx, grad, inner, parameters, plot,
+                    set_log_active)
 from fenics_adjoint import (Constant, Control, Function, assemble,
-                            compute_gradient, interpolate, project, solve)
+                            assemble_system, compute_gradient, interpolate,
+                            project, solve)
 from matplotlib.tri import Triangulation
 from torch_geometric.data import Data
 
@@ -103,7 +106,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         upp = np.ones((n,1))
         a0 = 1.0
         aa = np.zeros((mm,1))
-        c = 10000*np.ones((mm,1))
+        c = 100000*np.ones((mm,1))
         d = np.zeros((mm,1))
         move = 0.2
 
@@ -180,7 +183,9 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         t_overhead.append(time()-tic)
 
         tic = time()
-        solve(aC == LC, uhC, bcs=bcsC)  ##  Coarse FE
+        AC, bC = assemble_system(aC, LC, bcsC)
+        # solve(aC == LC, uhC, bcs=bcsC)  ##  Coarse FE
+        solve(AC, uhC.vector(), bC, 'mumps')
         t_coarse.append(time()-tic)
 
         tic = time()
@@ -194,12 +199,14 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
                 
         if(loop<Ni+Wi) or (divmod(max(loop-Ni-Wi,1),Nf)[1]==0):
             tic = time()
-            solve(a == L, uh, bcs=bcs)  ## fine
-            XDMFFile("uh.xdmf").write(uh)
-            XDMFFile("uhC.xdmf").write(uhC)
-            tmp = Function(V)
-            tmp.vector()[:] = assemble(L).get_local()
-            XDMFFile("load.xdmf").write(tmp)
+            A,b = assemble_system(a, L, bcs)
+            # solve(a == L, uh, bcs=bcs)  ## fine
+            solve(A, uh.vector(), b, 'mumps')
+            # XDMFFile("uh.xdmf").write(uh)
+            # XDMFFile("uhC.xdmf").write(uhC)
+            # tmp = Function(V)
+            # tmp.vector()[:] = assemble(L).get_local()
+            # XDMFFile("load.xdmf").write(tmp)
 
             Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
             comp = assemble(Ws*dx)
@@ -214,7 +221,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             tic = time()
             y, scalers, lb = output_assemble(
                 dc, loop, scalers if loop > 0 else None, lb if loop > 0 else None,
-                k=3)
+                k=2)
             output_apd.append(y)
             t_data.append(time()-tic)
 
@@ -264,7 +271,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         else:
             tic = time()
             pred_input_data = [pred_input(x_last, edge_ids, elem_ids, mesh) for edge_ids, elem_ids in zip(partitioned_graphs, part_info['elems'])]
-            # pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = len(pred_input_data))
             pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = len(pred_input_data))
             t_data.append(time()-tic)
 
@@ -319,7 +325,9 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     rhoh.assign(phih)
     rhoh.vector()[:] = filter(H,Hs,rhoh.vector()[:])
     a, L = build_weakform_struct(u, du, rhoh, t, ds, penal)
-    solve(a == L, uh, bcs=bcs,solver_parameters={'linear_solver':'mumps'})  ## fine
+    A, b = assemble_system(a, L, bcs)
+    # solve(a == L, uh, bcs=bcs,solver_parameters={'linear_solver':'mumps'})  ## fine
+    solve(A, uh.vector(),b,'mumps')
     Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
     comp = assemble(Ws*dx)
 
@@ -332,40 +340,42 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         XDMFFile("/workspace/results/density.xdmf").write(rhoh)
         den = pd.DataFrame(rhoh.vector()[:], columns = ['rhoh'])
         den.to_csv("/workspace/results/density.csv", index = False)
-        cord = pd.DataFrame(coords[:,0], columns = ['x'])
-        cord['y'] = coords[:,1]
-        cord['z'] = coords[:,2]
-        cord.to_csv("/workspace/results/coords.csv", index = False)
+        cord = pd.DataFrame(center[:,0], columns = ['x'])
+        cord['y'] = center[:,1]
+        cord['z'] = center[:,2]
+        cord.to_csv("/workspace/results/center.csv", index = False)
 
     # print("total time:", np.round(t_end), "final comp :", comp)
-    print(f"total time.: {t_end:.4e},\tfinal comp.: {comp:.4e}")
-    print("mesh :", np.round(sum(t_mesh)))
-    print("data :", np.round(sum(t_data)))
-    print("fine :", np.round(sum(t_fine)), ",call :", len(t_fine), ",once :", np.round(sum(t_fine)/len(t_fine),3))
-    print("coarse :", np.round(sum(t_coarse)), ",call :", len(t_coarse), ",once :", np.round(sum(t_coarse)/len(t_coarse),3))
-    print("overhead :", np.round(sum(t_overhead)))
-    print("training :", np.round(sum(t_training)), ",call :", len(t_training), ",once :", np.round(sum(t_training)/len(t_training),3))
-    print("pred :", np.round(sum(t_pred)), ",call :", len(t_pred), ",once :", np.round(sum(t_pred)/len(t_pred),3))
-    print("optimizer :", np.round(sum(t_optimizer)), ",call :", len(t_optimizer), ",once :", np.round(sum(t_optimizer)/len(t_optimizer),3))
+    f = open("/workspace/results/results.txt",'w')
+    print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']), file = f)
+    print(f"total time.: {t_end:.4e},\tfinal comp.: {comp:.4e}", file=f)
+    print("mesh :", np.round(sum(t_mesh)), file = f)
+    print("data :", np.round(sum(t_data)), file = f)
+    print("fine :", np.round(sum(t_fine)), ",call :", len(t_fine), ",once :", np.round(sum(t_fine)/len(t_fine),3), file = f)
+    print("coarse :", np.round(sum(t_coarse)), ",call :", len(t_coarse), ",once :", np.round(sum(t_coarse)/len(t_coarse),3), file = f)
+    print("overhead :", np.round(sum(t_overhead)), file = f)
+    print("training :", np.round(sum(t_training)), ",call :", len(t_training), ",once :", np.round(sum(t_training)/len(t_training),3), file = f)
+    print("pred :", np.round(sum(t_pred)), ",call :", len(t_pred), ",once :", np.round(sum(t_pred)/len(t_pred),3), file = f)
+    print("optimizer :", np.round(sum(t_optimizer)), ",call :", len(t_optimizer), ",once :", np.round(sum(t_optimizer)/len(t_optimizer),3), file = f)
 
 
 if __name__ == "__main__":
     ## parameters
     volfrac = 0.12
     maxiter = 200
-    N = 1000    ## number of elem in patch
-    hmax = 0.05
-    hmaxC = hmax*3
-    rmin = hmax*2
+    N = 800    ## number of elem in patch
+    hmax = 0.048
+    hmaxC = 0.19
+    rmin = hmax*1.6
     Ni = 10
     Nf = 10
     Wi = 10
-    Wu = 5
-    target_step_per_epoch = 15
-    epochs = 3
-    n_hidden = 256
+    Wu = 2
+    target_step_per_epoch = 20
+    epochs = 100
+    n_hidden = [100, 500, 1000]
     n_layer = 4
-    lr = 0.005
+    lr = 0.0005
     optimizer = 1   ####   0 --> MMA,   1 --> OC
     continuation = False
     torch.manual_seed(42)

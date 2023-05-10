@@ -1,5 +1,6 @@
 from collections import defaultdict
 
+import fenics as fe
 import numpy as np
 from fenics_adjoint import Constant
 from matplotlib.tri import Triangulation
@@ -109,3 +110,13 @@ def create_adjacent_tetrahedra_matrix(adjacent_tetrahedra):
         matrix[tetrahedron_index, :len(adj_set)] = list(adj_set)
 
     return matrix
+
+def line_indices(mesh, flag):
+    idx = np.where(flag==True)[0]
+    line_info = []
+    for i in range(mesh.num_entities(1)):
+        line_info.append(fe.Edge(mesh,i).entities(0).tolist())
+    line_info = np.array(line_info)
+    
+    matching_indices = [index for index, line in enumerate(line_info) if set(line).issubset(idx)]
+    return matching_indices

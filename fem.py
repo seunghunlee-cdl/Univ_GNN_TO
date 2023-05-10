@@ -52,8 +52,12 @@ def build_weakform_filter(rho, drho, phih, rmin):
 
 
 def build_weakform_struct(u, du, rhoh, t, ds, penal, subdomain_id=2):
+    loadArea = adj.assemble(adj.Constant(1.0)*ds(2))
+    scaledLoad = t / loadArea
+    # a = fe.inner(sigma(u,rhoh,penal), epsilon(du))*dx(0) + fe.inner(sigma(u,adj.Constant(1.0),penal), epsilon(du))*dx(1)
+    # L = fe.dot(scaledLoad, du)*ds(subdomain_id)
     a = fe.inner(sigma(u,rhoh,penal), epsilon(du))*fe.dx
-    L = fe.dot(t, du)*ds(subdomain_id)
+    L = fe.dot(scaledLoad, du)*ds(subdomain_id)
     return a, L
 
 

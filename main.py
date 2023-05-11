@@ -50,18 +50,15 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     t_training=[]
     t_pred=[]
     t_optimizer=[]
-    t_mesh = []
     input_apd=[]
     output_apd=[]
 
-    tic = time()
     mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info = get_clever3d_mesh(hmax=hmax, N=N)
     meshC, VC, FC, bcsC, tC, dsC, uC, duC, _, _, _ , _= get_clever3d_mesh(hmax = hmaxC)
-    t_mesh.append(time()-tic-t_part_info)
     t_overhead.append(t_part_info)
 
     print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
-
+    rmin = np.round(mesh.hmax(),3)
     v2dC, d2vC = get_dof_map(FC)
     dim = u.ufl_shape[0]
     coords = mesh.coordinates()
@@ -72,11 +69,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         areas = compute_triangle_area(coords[trias])
     else:
         areas = compute_tetra_area(coords[trias])
-
-    if continuation:
-        penal = Constant(1.0)
-    else:
-        penal = Constant(3.0)
 
     H = convolution_operator(center, rmin)
     Hs = H@np.ones(mesh.num_cells())
@@ -92,7 +84,12 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     
     rhoh = Function(F, name='density')   ## Filtered density
     m = Control(phih)
+    obj_hist = []
 
+    if continuation:
+        penal = Constant(1.0)
+    else:
+        penal = Constant(3.0)
     ## MMA parameters
     if optimizer == 0:
         mm = 1
@@ -200,7 +197,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         if(loop<Ni+Wi) or (divmod(max(loop-Ni-Wi,1),Nf)[1]==0):
             tic = time()
             A,b = assemble_system(a, L, bcs)
-            # solve(a == L, uh, bcs=bcs)  ## fine
             solve(A, uh.vector(), b, 'mumps')
             # XDMFFile("uh.xdmf").write(uh)
             # XDMFFile("uhC.xdmf").write(uhC)
@@ -210,6 +206,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
 
             Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
             comp = assemble(Ws*dx)
+            obj_hist.append([loop, comp])
             vol = (rhoh.vector()[:]*areas).sum()
             dc = compute_gradient(comp, m)   ### fine sensitivity
             t_fine.append(time()-tic)
@@ -344,12 +341,14 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         cord['y'] = center[:,1]
         cord['z'] = center[:,2]
         cord.to_csv("/workspace/results/center.csv", index = False)
+        obj = pd.DataFrame(np.array(obj_hist)[:,0], columns = ['iteration'])
+        obj['obj'] = np.array(obj_hist)[:,1]
+        obj.to_csv("/workspace/results/obj.csv", index = False)
 
     # print("total time:", np.round(t_end), "final comp :", comp)
     f = open("/workspace/results/results.txt",'w')
     print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']), file = f)
     print(f"total time.: {t_end:.4e},\tfinal comp.: {comp:.4e}", file=f)
-    print("mesh :", np.round(sum(t_mesh)), file = f)
     print("data :", np.round(sum(t_data)), file = f)
     print("fine :", np.round(sum(t_fine)), ",call :", len(t_fine), ",once :", np.round(sum(t_fine)/len(t_fine),3), file = f)
     print("coarse :", np.round(sum(t_coarse)), ",call :", len(t_coarse), ",once :", np.round(sum(t_coarse)/len(t_coarse),3), file = f)
@@ -363,9 +362,10 @@ if __name__ == "__main__":
     ## parameters
     volfrac = 0.12
     maxiter = 200
-    N = 800    ## number of elem in patch
+    N = 400    ## number of elem in patch
     hmax = 0.048
-    hmaxC = 0.19
+    # hmaxC = 0.19
+    hmaxC = 0.048
     rmin = hmax*1.6
     Ni = 10
     Nf = 10

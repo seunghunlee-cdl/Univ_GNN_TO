@@ -227,8 +227,6 @@ def get_clever3d_mesh(L = 2, H = 1, W = 0.5, hmax = 0.1, N=None):
     domains.set_all(0)
     boundaries = fe.MeshFunction("size_t", mesh, mesh.topology().dim() - 1)
     boundaries.set_all(0)
-    edge_function = fe.MeshFunction("size_t", mesh, mesh.topology().dim()- 2, 0)
-    edge_function.set_all(0)
 
     tol = 1E-5
     class DirBdSupp(fe.SubDomain):
@@ -345,91 +343,90 @@ def get_mbb3d_mesh(L=3, H=1, W=0.5, hmax=0.1, N=None):
     gmsh.model.add('mbb3d')
     T = 0.01
     # add points
-    gmsh.model.geo.addPoint(0, H, 0, hmax, 1)
-    gmsh.model.geo.addPoint(0, H, T, hmax, 2)
-    gmsh.model.geo.addPoint(T, H, T, hmax, 3)
-    gmsh.model.geo.addPoint(T, H, 0, hmax, 4)
-    gmsh.model.geo.addPoint(0, H, W, hmax, 5)
-    gmsh.model.geo.addPoint(L, H, W, hmax, 6)
-    gmsh.model.geo.addPoint(L, H, 0, hmax, 7)
+    # gmsh.model.geo.addPoint(0, H, 0, hmax, 1)
+    # gmsh.model.geo.addPoint(0, H, T, hmax, 2)
+    # gmsh.model.geo.addPoint(T, H, T, hmax, 3)
+    # gmsh.model.geo.addPoint(T, H, 0, hmax, 4)
+    # gmsh.model.geo.addPoint(0, H, W, hmax, 5)
+    # gmsh.model.geo.addPoint(L, H, W, hmax, 6)
+    # gmsh.model.geo.addPoint(L, H, 0, hmax, 7)
 
-    gmsh.model.geo.addPoint(L-T, hmax, W, hmax, 8)
-    gmsh.model.geo.addPoint(L-T, 0, W, hmax, 9)
-    gmsh.model.geo.addPoint(L, 0, W, hmax, 10)
-    gmsh.model.geo.addPoint(L, hmax, W, hmax, 11)
-    gmsh.model.geo.addPoint(0, hmax, W, hmax, 12)
-    gmsh.model.geo.addPoint(0, 0, W, hmax, 13)
-
-    gmsh.model.geo.addLine(1, 2, 1)
-    gmsh.model.geo.addLine(2, 3, 2)
-    gmsh.model.geo.addLine(3, 4, 3)
-    gmsh.model.geo.addLine(4, 1, 4)
-    gmsh.model.geo.addLine(2, 5, 5)
-    gmsh.model.geo.addLine(5, 6, 6)
-    gmsh.model.geo.addLine(6, 7, 7)
-    gmsh.model.geo.addLine(7, 4, 8)
-
-    gmsh.model.geo.addLine(8, 9, 9)
-    gmsh.model.geo.addLine(9, 10, 10)
-    gmsh.model.geo.addLine(10, 11, 11)
-    gmsh.model.geo.addLine(11, 8, 12)
-    gmsh.model.geo.addLine(8, 12, 13)
-    gmsh.model.geo.addLine(12, 13, 14)
-    gmsh.model.geo.addLine(13, 9, 15)
-
-    gmsh.model.geo.addCurveLoop([1, 2, 3, 4], 1)
-    gmsh.model.geo.addCurveLoop([5, 6, 7, 8, -3, -2], 2)
-
-    gmsh.model.geo.addCurveLoop([9, 10, 11, 12], 3)
-    gmsh.model.geo.addCurveLoop([13, 14, 15, -9], 4)
-
-    gmsh.model.geo.addPlaneSurface([1], 1)
-    gmsh.model.geo.addPlaneSurface([2], 2)
-    gmsh.model.geo.addPlaneSurface([3], 3)
-    gmsh.model.geo.addPlaneSurface([4], 4)
-
-    gmsh.model.geo.extrude([(2, 1)], 0, -H, 0)
-    gmsh.model.geo.extrude([(2, 2)], 0, -H, 0)
-    gmsh.model.geo.extrude([(2, 3)], 0, 0, -W)
-    gmsh.model.geo.extrude([(2, 4)], 0, 0, -W)
-
-    # gmsh.model.geo.addPoint(0, 0, 0, hmax, 1)
-    # gmsh.model.geo.addPoint(0, 0, T, hmax, 2)
-    # gmsh.model.geo.addPoint(T, 0, T, hmax, 3)
-    # gmsh.model.geo.addPoint(T, 0, 0, hmax, 4)
-    # gmsh.model.geo.addPoint(L-T, 0, W-T, hmax, 5)
-    # gmsh.model.geo.addPoint(L-T, 0, W, hmax, 6)
-    # gmsh.model.geo.addPoint(L, 0, W, hmax, 7)
-    # gmsh.model.geo.addPoint(L, 0, W-T, hmax, 8)
-    # gmsh.model.geo.addPoint(0, 0, W, hmax, 9)
-    # gmsh.model.geo.addPoint(L, 0, 0, hmax, 10)
+    # gmsh.model.geo.addPoint(L-T, hmax, W, hmax, 8)
+    # gmsh.model.geo.addPoint(L-T, 0, W, hmax, 9)
+    # gmsh.model.geo.addPoint(L, 0, W, hmax, 10)
+    # gmsh.model.geo.addPoint(L, hmax, W, hmax, 11)
+    # gmsh.model.geo.addPoint(0, hmax, W, hmax, 12)
+    # gmsh.model.geo.addPoint(0, 0, W, hmax, 13)
 
     # gmsh.model.geo.addLine(1, 2, 1)
     # gmsh.model.geo.addLine(2, 3, 2)
     # gmsh.model.geo.addLine(3, 4, 3)
     # gmsh.model.geo.addLine(4, 1, 4)
-    # gmsh.model.geo.addLine(5, 6, 5)
-    # gmsh.model.geo.addLine(6, 7, 6)
-    # gmsh.model.geo.addLine(7, 8, 7)
-    # gmsh.model.geo.addLine(8, 5, 8)
-    # gmsh.model.geo.addLine(2, 9, 9)
-    # gmsh.model.geo.addLine(9, 6, 10)
-    # gmsh.model.geo.addLine(8, 10, 11)
-    # gmsh.model.geo.addLine(10, 4, 12)
+    # gmsh.model.geo.addLine(2, 5, 5)
+    # gmsh.model.geo.addLine(5, 6, 6)
+    # gmsh.model.geo.addLine(6, 7, 7)
+    # gmsh.model.geo.addLine(7, 4, 8)
+
+    # gmsh.model.geo.addLine(8, 9, 9)
+    # gmsh.model.geo.addLine(9, 10, 10)
+    # gmsh.model.geo.addLine(10, 11, 11)
+    # gmsh.model.geo.addLine(11, 8, 12)
+    # gmsh.model.geo.addLine(8, 12, 13)
+    # gmsh.model.geo.addLine(12, 13, 14)
+    # gmsh.model.geo.addLine(13, 9, 15)
 
     # gmsh.model.geo.addCurveLoop([1, 2, 3, 4], 1)
-    # gmsh.model.geo.addCurveLoop([5, 6, 7, 8], 2)
-    # gmsh.model.geo.addCurveLoop([9, 10, -5, -8, 11, 12, -3, -2], 3)
-    
+    # gmsh.model.geo.addCurveLoop([5, 6, 7, 8, -3, -2], 2)
+
+    # gmsh.model.geo.addCurveLoop([9, 10, 11, 12], 3)
+    # gmsh.model.geo.addCurveLoop([13, 14, 15, -9], 4)
+
     # gmsh.model.geo.addPlaneSurface([1], 1)
     # gmsh.model.geo.addPlaneSurface([2], 2)
     # gmsh.model.geo.addPlaneSurface([3], 3)
-    # gmsh.model.geo.extrude([(2, 1)], 0, H, 0)
-    # gmsh.model.geo.extrude([(2, 2)], 0, H, 0)
-    # gmsh.model.geo.extrude([(2, 3)], 0, H, 0)
+    # gmsh.model.geo.addPlaneSurface([4], 4)
+
+    # gmsh.model.geo.extrude([(2, 1)], 0, -H, 0)
+    # gmsh.model.geo.extrude([(2, 2)], 0, -H, 0)
+    # gmsh.model.geo.extrude([(2, 3)], 0, 0, -W)
+    # gmsh.model.geo.extrude([(2, 4)], 0, 0, -W)
+
+    gmsh.model.geo.addPoint(0, 0, 0, hmax, 1)
+    gmsh.model.geo.addPoint(0, 0, T, hmax, 2)
+    gmsh.model.geo.addPoint(T, 0, T, hmax, 3)
+    gmsh.model.geo.addPoint(T, 0, 0, hmax, 4)
+    gmsh.model.geo.addPoint(L-T, 0, W-T, hmax, 5)
+    gmsh.model.geo.addPoint(L-T, 0, W, hmax, 6)
+    gmsh.model.geo.addPoint(L, 0, W, hmax, 7)
+    gmsh.model.geo.addPoint(L, 0, W-T, hmax, 8)
+    gmsh.model.geo.addPoint(0, 0, W, hmax, 9)
+    gmsh.model.geo.addPoint(L, 0, 0, hmax, 10)
+
+    gmsh.model.geo.addLine(1, 2, 1)
+    gmsh.model.geo.addLine(2, 3, 2)
+    gmsh.model.geo.addLine(3, 4, 3)
+    gmsh.model.geo.addLine(4, 1, 4)
+    gmsh.model.geo.addLine(5, 6, 5)
+    gmsh.model.geo.addLine(6, 7, 6)
+    gmsh.model.geo.addLine(7, 8, 7)
+    gmsh.model.geo.addLine(8, 5, 8)
+    gmsh.model.geo.addLine(2, 9, 9)
+    gmsh.model.geo.addLine(9, 6, 10)
+    gmsh.model.geo.addLine(8, 10, 11)
+    gmsh.model.geo.addLine(10, 4, 12)
+
+    gmsh.model.geo.addCurveLoop([1, 2, 3, 4], 1)
+    gmsh.model.geo.addCurveLoop([5, 6, 7, 8], 2)
+    gmsh.model.geo.addCurveLoop([9, 10, -5, -8, 11, 12, -3, -2], 3)
+    
+    gmsh.model.geo.addPlaneSurface([1], 1)
+    gmsh.model.geo.addPlaneSurface([2], 2)
+    gmsh.model.geo.addPlaneSurface([3], 3)
+    gmsh.model.geo.extrude([(2, 1)], 0, H, 0)
+    gmsh.model.geo.extrude([(2, 2)], 0, H, 0)
+    gmsh.model.geo.extrude([(2, 3)], 0, H, 0)
 
     mesh, part_info, t_part_info = generate_fenics_mesh_3d(N)
-    gmsh.write("mesh.msh")
     gmsh.finalize()
 
     if N:
@@ -456,29 +453,29 @@ def get_mbb3d_mesh(L=3, H=1, W=0.5, hmax=0.1, N=None):
     class DirBdY(fe.SubDomain):
         def inside(self, x, on_boundary):
             # return (x[0] >= L-(T+tol)) and (x[1] <= tol) and (x[2] <= W-(T+tol)) and on_boundary
-            return (x[0] >= L-T-tol) and (x[1] <= tol) and on_boundary
+            return (x[0] >= L-T-tol) and (x[1] <= tol) and (x[2] >= W-T-tol) and on_boundary
     class DirBdZ(fe.SubDomain):
         def inside(self, x, on_boundary):
             return (x[2] <= tol) and on_boundary
+        
     dirBdX, dirBdY, dirBdZ = [DirBdX(), DirBdY(), DirBdZ()]
     dirBdX.mark(boundaries, 1)
     dirBdY.mark(boundaries, 1)
     dirBdZ.mark(boundaries, 1)
     dbX = adj.DirichletBC(V.sub(0), adj.Constant(0.0), dirBdX)
     dbY = adj.DirichletBC(V.sub(1), adj.Constant(0.0), dirBdY)
-    dbY2 = adj.DirichletBC(V.sub(2), adj.Constant(0.0), dirBdY)
     dbZ = adj.DirichletBC(V.sub(2), adj.Constant(0.0), dirBdZ)
-    bcs = [dbX, dbY, dbZ, dbY2]
+    bcs = [dbX, dbY, dbZ]
 
     class TracBd(fe.SubDomain):
         def inside(self, x, on_boundary):
             return (x[0] <= T+tol) and (x[2] <= T+tol) and (x[1] >= H-tol) and on_boundary
+        
     tracBd = TracBd()
     tracBd.mark(boundaries, 2)
     t = adj.Constant((0.0, -1.0, 0.0))
     ds = fe.Measure("ds", domain = mesh, subdomain_data = boundaries)
-    dx = fe.Measure("dx", domain = mesh, subdomain_data = domains)
-    return mesh, V, F, bcs, t, ds, dx, u, du, rho, drho, part_info, t_part_info
+    return mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info
 
 def get_wrench2d_mesh(L: float = 2, R1: float = 0.5, R2: float = 0.3, r1: float = 0.3, r2: float = 0.175, hmax: float = 0.1, N = None):
     # Initialize

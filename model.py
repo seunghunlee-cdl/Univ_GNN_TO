@@ -48,6 +48,40 @@ class MyGNN(torch.nn.Module):
         return self.output(x,edge_index)
         # x = self.output_act(self.output(x, edge_index))
         # return -x
+
+class MyGNN2(torch.nn.Module):
+    def __init__(self, n_input, n_hiddens, n_layer, dropout):
+        super().__init__()
+        
+        self.feature_extractor = torch.nn.Sequential(
+            torch.nn.Linear(n_input, n_hiddens[0]),
+            torch.nn.LeakyReLU(),
+            torch.nn.Linear(n_hiddens[0], n_hiddens[0]),
+            torch.nn.LeakyReLU(),
+            torch.nn.Linear(n_hiddens[0], n_hiddens[0]),
+            torch.nn.LeakyReLU(),
+        )
+        self.input = pyg.nn.GCNConv(n_hiddens[0], n_hiddens[0])
+        self.input_act = torch.nn.LeakyReLU()
+        self.dropout = torch.nn.ModuleList()
+        self.hidden = torch.nn.ModuleList()
+        self.hidden_act = torch.nn.ModuleList()
+
+        for i in range(1, len(n_hiddens)):
+            self.hidden.append(pyg.nn.GCNConv(n_hiddens[i-1], n_hiddens[i]))
+            self.dropout.append(torch.nn.Dropout(p=dropout))
+            self.hidden_act.append(torch.nn.LeakyReLU())
+        self.output = pyg.nn.GCNConv(n_hiddens[-1], 1)
+        # self.output_act = torch.nn.LeakyReLU()
+        
+    def forward(self, x, edge_index):
+        x = self.feature_extractor(x)
+        x = self.input_act(self.input(x, edge_index))
+        for layer, drop, act in zip(self.hidden, self.dropout, self.hidden_act):
+            x = layer(x, edge_index)
+            x = drop(x)
+            x = act(x)
+        return self.output(x,edge_index)
     
 def training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net=None):
     dataset_size = len(dataset)
@@ -58,10 +92,11 @@ def training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net=Non
     train_loader = pyg.loader.DataLoader(train_dataset, batch_size = batch_size)
     validation_loader = pyg.loader.DataLoader(validation_dataset, batch_size = batch_size)
     if net is None:
-        net = MyGNN(dataset[0]['x'].shape[1], n_hidden, n_layer, 0.2).to(device)
+        net = MyGNN(dataset[0]['x'].shape[1], n_hidden, n_layer, 0.1).to(device)
     optim = torch.optim.Adam(net.parameters(), lr=lr)
-    criterion = torch.nn.L1Loss()
-    # criterion = torch.nn.MSELoss()
+    # scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=50, gamma=0.9)
+    # criterion = torch.nn.L1Loss()
+    criterion = torch.nn.MSELoss()
 
     train_history = []
     val_history = []
@@ -87,6 +122,10 @@ def training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net=Non
                 running_loss += loss.item()
         val_loss = running_loss/len(train_loader)
         val_history.append(val_loss)
+        # if optim.param_groups[0]['lr'] > 0.0005:
+        #     scheduler.step()
+        # else:
+        #     break
         pbar.set_postfix_str(f'loss={train_loss:.3e}/{val_loss:.3e}')
     return train_history, val_history, net
 

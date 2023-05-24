@@ -52,8 +52,11 @@ def build_weakform_filter(rho, drho, phih, rmin):
 
 
 def build_weakform_struct(u, du, rhoh, t, ds, penal, subdomain_id=2):
-    loadArea = adj.assemble(adj.Constant(1.0)*ds(2))
-    scaledLoad = t / loadArea
+    if u.ufl_shape[0]==3:
+        loadArea = adj.assemble(adj.Constant(1.0)*ds(2))
+        scaledLoad = t / loadArea
+    else:
+        scaledLoad = t
     # a = fe.inner(sigma(u,rhoh,penal), epsilon(du))*dx(0) + fe.inner(sigma(u,adj.Constant(1.0),penal), epsilon(du))*dx(1)
     # L = fe.dot(scaledLoad, du)*ds(subdomain_id)
     a = fe.inner(sigma(u,rhoh,penal), epsilon(du))*fe.dx
@@ -67,11 +70,12 @@ def displacement(u):
 
 def input_assemble(rhoh, uhC, V, F, FC, v2dC, center, coordsC=None, T=None, scaler=None):
     eC = epsilon(uhC)
+    # uht = adj.interpolate(uhC,V)
+    # eC = epsilon(uht)
     e_mapped = np.zeros((F.mesh().num_cells(), eC.ufl_shape[0]))
-        # uhbar = adj.interpolate(uhC,V)
-    # strain = epsilon(uhbar)
-    # for i in range(3):
-        # e_mapped[:,i]=adj.project(strain[i],F).vector()[:]
+
+    # for i in range(eC.ufl_shape[0]):
+        # e_mapped[:,i]=adj.project(eC[i],F).vector()[:]
     if center.shape[1] == 2:
         for i in range(3):
             coarse_node2fine_cell = LinearTriInterpolator(T, adj.project(eC[i], FC).vector()[v2dC])

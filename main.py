@@ -22,14 +22,15 @@ from torch_geometric.data import Data
 from fem import (build_weakform_filter, build_weakform_struct, epsilon,
                  input_assemble, oc, output_assemble, sigma)
 from mesh import (get_clever2d_mesh, get_clever3d_mesh, get_dof_map,
-                  get_halfcircle2d_mesh, get_lshape2d_mesh, get_mbb2d_mesh,
-                  get_mbb3d_mesh, get_wrench2d_mesh)
+                  get_halfcircle2d_mesh, get_hook2d_mesh, get_hook3d_mesh,
+                  get_lshape2d_mesh, get_mbb2d_mesh, get_mbb3d_mesh,
+                  get_wrench2d_mesh)
 from MMA import mmasub
 from model import (MyGNN, generate_data, graph_partitioning, pred_input,
                    training)
 from utils import (compute_tetra_area, compute_theta_error,
-                   compute_triangle_area, convolution_operator, filter,
-                   map_density, tree_maker)
+                   compute_triangle_area, convolution_operator, dropping,
+                   filter, map_density, tree_maker)
 
 set_log_active(False)
 torch.cuda.empty_cache()
@@ -53,12 +54,11 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     input_apd=[]
     output_apd=[]
 
-    mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info = get_clever3d_mesh(hmax=hmax, N=N)
-    meshC, VC, FC, bcsC, tC, dsC, uC, duC, _, _, _ , _= get_clever3d_mesh(hmax = hmaxC)
+    mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info = get_hook3d_mesh(hmax=hmax, N=N)
+    meshC, VC, FC, bcsC, tC, dsC, uC, duC, _, _, _ , _= get_hook3d_mesh(hmax = hmaxC)
     t_overhead.append(t_part_info)
 
     print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
-    rmin = np.round(mesh.hmax(),3)
     v2dC, d2vC = get_dof_map(FC)
     dim = u.ufl_shape[0]
     coords = mesh.coordinates()
@@ -128,11 +128,11 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
 
         rhoh.assign(phih)
         rhoh.vector()[:] = filter(H,Hs,rhoh.vector()[:])
-
+ 
         tic = time()
         a, L = build_weakform_struct(u, du, rhoh, t, ds, penal)
-        solve(a == L, uh, bcs = bcs)
-
+        A, b = assemble_system(a,L,bcs)
+        solve(A,uh.vector(),b)
         Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
         comp = assemble(Ws*dx)
         vol = (rhoh.vector()[:]*areas).sum()
@@ -173,16 +173,16 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     while loop < maxiter:
         rhoh.assign(phih)
         rhoh.vector()[:] = filter(H,Hs,rhoh.vector()[:])
-        # rhohC = project(rhoh,FC)
         map_density(rhoh, rhohC, mesh, meshC, None, v2dC)
         tic = time()
         # rhohC.vector()[v2dC] = rhoh.vector()[fcc2cn] ## density mapping
+        drop_patch = dropping(part_info, rhoh)
         t_overhead.append(time()-tic)
 
         tic = time()
         AC, bC = assemble_system(aC, LC, bcsC)
+        solve(AC, uhC.vector(), bC)
         # solve(aC == LC, uhC, bcs=bcsC)  ##  Coarse FE
-        solve(AC, uhC.vector(), bC, 'mumps')
         t_coarse.append(time()-tic)
 
         tic = time()
@@ -197,12 +197,11 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         if(loop<Ni+Wi) or (divmod(max(loop-Ni-Wi,1),Nf)[1]==0):
             tic = time()
             A,b = assemble_system(a, L, bcs)
-            solve(A, uh.vector(), b, 'mumps')
-            # XDMFFile("uh.xdmf").write(uh)
-            # XDMFFile("uhC.xdmf").write(uhC)
-            # tmp = Function(V)
-            # tmp.vector()[:] = assemble(L).get_local()
-            # XDMFFile("load.xdmf").write(tmp)
+            solve(A, uh.vector(), b)
+            # solve(a == L, uh, bcs)
+            tmp = Function(V)
+            tmp.vector()[:] = assemble(L).get_local()
+            XDMFFile("/workspace/results/load.xdmf").write(tmp)
 
             Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
             comp = assemble(Ws*dx)
@@ -217,7 +216,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             ## Store
             tic = time()
             y, scalers, lb = output_assemble(
-                dc, loop, scalers if loop > 0 else None, lb if loop > 0 else None,
+                dc_bar, loop, scalers if loop > 0 else None, lb if loop > 0 else None,
                 k=2)
             output_apd.append(y)
             t_data.append(time()-tic)
@@ -228,7 +227,8 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
                 tic = time()
                 for i in range(Wi):
                     data_list.append([generate_data(input_apd[-(i+1)], output_apd[-(i+1)], edge_ids, elem_ids, mesh) for edge_ids, elem_ids in zip(partitioned_graphs, part_info['elems'])])
-                dataset = sum(data_list,[])
+                # dataset = sum(data_list,[])
+                dataset = [data_list[0][i] for i, value in enumerate(drop_patch) if value]
                 t_data.append(time()-tic)
 
                 tic = time()
@@ -239,7 +239,8 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
                 tic = time()
                 for i in range(Wu):
                     data_list.append([generate_data(input_apd[-(i+1)], output_apd[-(i+1)], edge_ids, elem_ids,mesh) for edge_ids, elem_ids in zip(partitioned_graphs, part_info['elems'])])
-                dataset = sum(data_list,[])
+                # dataset = sum(data_list,[])
+                dataset = [data_list[0][i] for i, value in enumerate(drop_patch) if value]
                 t_data.append(time()-tic)
 
                 tic = time()
@@ -268,7 +269,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         else:
             tic = time()
             pred_input_data = [pred_input(x_last, edge_ids, elem_ids, mesh) for edge_ids, elem_ids in zip(partitioned_graphs, part_info['elems'])]
-            pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = len(pred_input_data))
+            pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = batch_size*2)
             t_data.append(time()-tic)
 
             tic = time()
@@ -282,7 +283,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             dc_pred.vector()[np.where(dc_pred.vector()[:]>0)[0]]=0
             t_pred.append(time()-tic)
 
-            dc_pred_bar.vector()[:] = filter(H,Hs,dc_pred.vector()[:])
+            # dc_pred_bar.vector()[:] = filter(H,Hs,dc_pred.vector()[:])
             
             # therr = compute_theta_error(dc,dc_pred)    ###### theta_error
             # print(f'theta={therr:.3f}')
@@ -309,7 +310,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
                 xold1 = xval.copy()
                 phih.vector()[:] = xmma.ravel()
             elif optimizer == 1:
-                phih.vector()[:] = oc(phih, dc_pred_bar, dv_bar, mesh, H, Hs, volfrac,areas)
+                phih.vector()[:] = oc(phih, dc_pred, dv_bar, mesh, H, Hs, volfrac,areas)
             t_optimizer.append(time()-tic)
 
         # plt.cla()
@@ -324,7 +325,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     a, L = build_weakform_struct(u, du, rhoh, t, ds, penal)
     A, b = assemble_system(a, L, bcs)
     # solve(a == L, uh, bcs=bcs,solver_parameters={'linear_solver':'mumps'})  ## fine
-    solve(A, uh.vector(),b,'mumps')
+    solve(A, uh.vector(),b)
     Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
     comp = assemble(Ws*dx)
 
@@ -341,6 +342,8 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         cord['y'] = center[:,1]
         cord['z'] = center[:,2]
         cord.to_csv("/workspace/results/center.csv", index = False)
+        pd.DataFrame(mesh.coordinates()).to_csv('/workspace/results/nodes.csv', index=False, header=False)
+        pd.DataFrame(mesh.cells()).to_csv('/workspace/results/cells.csv', index=False, header=False)
         obj = pd.DataFrame(np.array(obj_hist)[:,0], columns = ['iteration'])
         obj['obj'] = np.array(obj_hist)[:,1]
         obj.to_csv("/workspace/results/obj.csv", index = False)
@@ -356,24 +359,27 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     print("training :", np.round(sum(t_training)), ",call :", len(t_training), ",once :", np.round(sum(t_training)/len(t_training),3), file = f)
     print("pred :", np.round(sum(t_pred)), ",call :", len(t_pred), ",once :", np.round(sum(t_pred)/len(t_pred),3), file = f)
     print("optimizer :", np.round(sum(t_optimizer)), ",call :", len(t_optimizer), ",once :", np.round(sum(t_optimizer)/len(t_optimizer),3), file = f)
+    print("hmax : ",hmax, "rmin : ", rmin, file=f)
 
 
 if __name__ == "__main__":
     ## parameters
-    volfrac = 0.12
-    maxiter = 200
-    N = 400    ## number of elem in patch
-    hmax = 0.048
-    # hmaxC = 0.19
-    hmaxC = 0.048
-    rmin = hmax*1.6
-    Ni = 10
-    Nf = 10
+    volfrac = 0.15
+    maxiter = 300
+    N = 200    ## number of elem in patch
+    hmax = 0.09
+    hmaxC = hmax*3
+    # hmaxC = 0.048
+    # rmin = 0.6
+    rmin = hmax*2.5
+    Ni = 15
+    Nf = 5
     Wi = 10
-    Wu = 2
-    target_step_per_epoch = 20
+    Wu = 5
+    target_step_per_epoch = 15
     epochs = 100
-    n_hidden = [100, 500, 1000]
+    # n_hidden = [600, 600, 600]
+    n_hidden = [512, 512]
     n_layer = 4
     lr = 0.0005
     optimizer = 1   ####   0 --> MMA,   1 --> OC

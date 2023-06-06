@@ -30,7 +30,7 @@ from model import (MyGNN, generate_data, graph_partitioning, pred_input,
                    training)
 from utils import (compute_tetra_area, compute_theta_error,
                    compute_triangle_area, convolution_operator, dropping,
-                   filter, map_density, tree_maker)
+                   dropping2, filter, map_density, tree_maker)
 
 set_log_active(False)
 torch.cuda.empty_cache()
@@ -53,6 +53,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     t_optimizer=[]
     input_apd=[]
     output_apd=[]
+    data_size = []
 
     mesh, V, F, bcs, t, ds, u, du, rho, drho, part_info, t_part_info = get_hook3d_mesh(hmax=hmax, N=N)
     meshC, VC, FC, bcsC, tC, dsC, uC, duC, _, _, _ , _= get_hook3d_mesh(hmax = hmaxC)
@@ -82,7 +83,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     dv_bar = Function(F)
     dc_pred_bar = Function(F)
     
-    rhoh = Function(F, name='density')   ## Filtered density
+    rhoh = Function(F)   ## Filtered density
     m = Control(phih)
     obj_hist = []
 
@@ -118,7 +119,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     if dim == 2:
         T = Triangulation(*meshC.coordinates().T, triangles=meshC.cells())
     batch_size = np.ceil(len(part_info['nodes'])/target_step_per_epoch).astype(int).item()
-    fcc2cn = tree_maker(center, meshC)
+    # fcc2cn = tree_maker(center, meshC)
     t_overhead.append(time()-tic)
 
     loop = 0
@@ -160,8 +161,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             phih.vector()[:] = oc(phih,dc_bar,dv_bar,mesh,H,Hs,volfrac,areas)
         t_optimizer.append(time()-tic)
 
-        # plot(rhoh, cmap="gray_r")
-        # plt.savefig("test.png")
         if iteration == 19:
             penal = Constant(2.0)
         iteration += 1
@@ -173,6 +172,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     while loop < maxiter:
         rhoh.assign(phih)
         rhoh.vector()[:] = filter(H,Hs,rhoh.vector()[:])
+
         map_density(rhoh, rhohC, mesh, meshC, None, v2dC)
         tic = time()
         # rhohC.vector()[v2dC] = rhoh.vector()[fcc2cn] ## density mapping
@@ -199,12 +199,10 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             A,b = assemble_system(a, L, bcs)
             solve(A, uh.vector(), b)
             # solve(a == L, uh, bcs)
-            tmp = Function(V)
-            tmp.vector()[:] = assemble(L).get_local()
-            XDMFFile("/workspace/results/load.xdmf").write(tmp)
 
             Ws = inner(sigma(uh,rhoh,penal), epsilon(uh))
             comp = assemble(Ws*dx)
+            comp_old = comp
             obj_hist.append([loop, comp])
             vol = (rhoh.vector()[:]*areas).sum()
             dc = compute_gradient(comp, m)   ### fine sensitivity
@@ -216,7 +214,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
             ## Store
             tic = time()
             y, scalers, lb = output_assemble(
-                dc_bar, loop, scalers if loop > 0 else None, lb if loop > 0 else None,
+                dc_bar, loop, F, scalers if loop > 0 else None, lb if loop > 0 else None,
                 k=2)
             output_apd.append(y)
             t_data.append(time()-tic)
@@ -229,6 +227,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
                     data_list.append([generate_data(input_apd[-(i+1)], output_apd[-(i+1)], edge_ids, elem_ids, mesh) for edge_ids, elem_ids in zip(partitioned_graphs, part_info['elems'])])
                 # dataset = sum(data_list,[])
                 dataset = [data_list[0][i] for i, value in enumerate(drop_patch) if value]
+                data_size.append(len(dataset))
                 t_data.append(time()-tic)
 
                 tic = time()
@@ -241,6 +240,7 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
                     data_list.append([generate_data(input_apd[-(i+1)], output_apd[-(i+1)], edge_ids, elem_ids,mesh) for edge_ids, elem_ids in zip(partitioned_graphs, part_info['elems'])])
                 # dataset = sum(data_list,[])
                 dataset = [data_list[0][i] for i, value in enumerate(drop_patch) if value]
+                data_size.append(len(dataset))
                 t_data.append(time()-tic)
 
                 tic = time()
@@ -263,13 +263,14 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
                 xold1 = xval.copy()
                 phih.vector()[:] = xmma.ravel()
             elif optimizer == 1:
-                phih.vector()[:] = oc(phih, dc_bar, dv_bar, mesh, H, Hs, volfrac,areas)
+                phih.vector()[:] = oc(phih, dc_bar, dv_bar, mesh, H, Hs, volfrac, areas)
             t_optimizer.append(time()-tic)
         
         else:
             tic = time()
             pred_input_data = [pred_input(x_last, edge_ids, elem_ids, mesh) for edge_ids, elem_ids in zip(partitioned_graphs, part_info['elems'])]
-            pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = batch_size*2)
+            # pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = batch_size*2)
+            pred_loader = pyg.loader.DataLoader(pred_input_data, batch_size = len(pred_input_data))
             t_data.append(time()-tic)
 
             tic = time()
@@ -332,6 +333,10 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     if dim == 2:
         plot(rhoh, cmap = "gray_r")
         plt.savefig("test"+'.png')
+        plt.cla()
+        plt.clf()
+        plt.plot(data_size)
+        plt.savefig("data.png")
     else:
         XDMFFile("/workspace/results/displacement.xdmf").write(uh)
         XDMFFile("/workspace/results/sensitivity.xdmf").write(dc)
@@ -348,7 +353,6 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
         obj['obj'] = np.array(obj_hist)[:,1]
         obj.to_csv("/workspace/results/obj.csv", index = False)
 
-    # print("total time:", np.round(t_end), "final comp :", comp)
     f = open("/workspace/results/results.txt",'w')
     print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']), file = f)
     print(f"total time.: {t_end:.4e},\tfinal comp.: {comp:.4e}", file=f)
@@ -361,14 +365,26 @@ def main(volfrac, maxiter, N, hmax, hamxC, rmin, Ni, Nf, Wi, Wu, target_step_per
     print("optimizer :", np.round(sum(t_optimizer)), ",call :", len(t_optimizer), ",once :", np.round(sum(t_optimizer)/len(t_optimizer),3), file = f)
     print("hmax : ",hmax, "rmin : ", rmin, file=f)
 
+    # print("fine :", mesh.num_cells(),",","Coarse :", meshC.num_entities(0),",","Patch :", len(part_info['nodes']))
+    # print(f"total time.: {t_end:.4e},\tfinal comp.: {comp:.4e}")
+    # print("data :", np.round(sum(t_data)))
+    # print("fine :", np.round(sum(t_fine)), ",call :", len(t_fine), ",once :", np.round(sum(t_fine)/len(t_fine),3))
+    # print("coarse :", np.round(sum(t_coarse)), ",call :", len(t_coarse), ",once :", np.round(sum(t_coarse)/len(t_coarse),3))
+    # print("overhead :", np.round(sum(t_overhead)))
+    # print("training :", np.round(sum(t_training)), ",call :", len(t_training), ",once :", np.round(sum(t_training)/len(t_training),3))
+    # print("pred :", np.round(sum(t_pred)), ",call :", len(t_pred), ",once :", np.round(sum(t_pred)/len(t_pred),3))
+    # print("optimizer :", np.round(sum(t_optimizer)), ",call :", len(t_optimizer), ",once :", np.round(sum(t_optimizer)/len(t_optimizer),3))
+    # print("hmax : ",hmax, "rmin : ", rmin)
+
 
 if __name__ == "__main__":
     ## parameters
     volfrac = 0.15
     maxiter = 300
-    N = 200    ## number of elem in patch
+    N = 200   ## number of elem in patch
     hmax = 0.09
-    hmaxC = hmax*3
+    # hmax = 0.01
+    hmaxC = hmax*4
     # hmaxC = 0.048
     # rmin = 0.6
     rmin = hmax*2.5
@@ -376,11 +392,11 @@ if __name__ == "__main__":
     Nf = 5
     Wi = 10
     Wu = 5
-    target_step_per_epoch = 15
-    epochs = 100
+    target_step_per_epoch = 10
+    epochs = 3
     # n_hidden = [600, 600, 600]
-    n_hidden = [512, 512]
-    n_layer = 4
+    n_hidden = [512, 1024, 512]
+    n_layer = 3
     lr = 0.0005
     optimizer = 1   ####   0 --> MMA,   1 --> OC
     continuation = False

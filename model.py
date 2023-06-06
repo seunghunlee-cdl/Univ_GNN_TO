@@ -95,8 +95,8 @@ def training(dataset, batch_size, n_hidden, n_layer, lr, epochs, device, net=Non
         net = MyGNN(dataset[0]['x'].shape[1], n_hidden, n_layer, 0.1).to(device)
     optim = torch.optim.Adam(net.parameters(), lr=lr)
     # scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=50, gamma=0.9)
-    # criterion = torch.nn.L1Loss()
-    criterion = torch.nn.MSELoss()
+    criterion = torch.nn.L1Loss()
+    # criterion = torch.nn.MSELoss()
 
     train_history = []
     val_history = []

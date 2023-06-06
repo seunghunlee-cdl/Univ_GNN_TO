@@ -122,12 +122,23 @@ def line_indices(mesh, flag):
     matching_indices = [index for index, line in enumerate(line_info) if set(line).issubset(idx)]
     return matching_indices
 
-def dropping(part_info,x):
+def dropping(part_info,x):  ####### only dropout:0
     N = part_info['elems']
     den_patch = []
     for i in range(len(N)):
         partelem = N[i]
         if all(x.vector()[partelem]==0) and (random.random()<0.9):
+            den_patch.append(False)
+        else:
+            den_patch.append(True)
+    return den_patch
+
+def dropping2(part_info,x):  ####### both dropout:0 and 1
+    N = part_info['elems']
+    den_patch = []
+    for i in range(len(N)):
+        partelem = N[i]
+        if (all(x.vector()[partelem]==0) or all(x.vector()[partelem]==1)) and (random.random()<0.9):
             den_patch.append(False)
         else:
             den_patch.append(True)

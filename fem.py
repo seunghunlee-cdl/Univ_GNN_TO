@@ -2,8 +2,9 @@ import fenics as fe
 import fenics_adjoint as adj
 import numpy as np
 from matplotlib.tri import LinearTriInterpolator
-from scipy.interpolate import LinearNDInterpolator
+from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 from scipy.sparse.linalg import factorized
+from scipy.spatial import cKDTree
 from sklearn.preprocessing import MinMaxScaler
 
 from utils import filter, map_mesh
@@ -81,9 +82,19 @@ def input_assemble(rhoh, uhC, V, F, FC, v2dC, center, coordsC=None, T=None, scal
             coarse_node2fine_cell = LinearTriInterpolator(T, adj.project(eC[i], FC).vector()[v2dC])
             e_mapped[:, i] = coarse_node2fine_cell(*center.T).data
     else:
+        tree = None
         for i in range(6):
-            interpolator = LinearNDInterpolator(coordsC,adj.project(eC[i], FC).vector()[v2dC])
-            e_mapped[:, i] = interpolator(center).data
+            data_from = adj.project(eC[i], FC).vector()[v2dC]
+            interpolator = LinearNDInterpolator(coordsC, data_from)
+            data = interpolator(center).data
+            flag = np.isnan(data)
+            e_mapped[:, i] = data
+            if flag.any():
+                if not tree:
+                    tree = cKDTree(coordsC)
+                _, inearest = tree.query(center[flag])
+                e_mapped[flag, i] = data_from[inearest]
+            
 
     if scaler is None:
         scaler = MinMaxScaler(feature_range=(-1,1))
@@ -94,19 +105,34 @@ def input_assemble(rhoh, uhC, V, F, FC, v2dC, center, coordsC=None, T=None, scal
     return x, scaler
 
 
-def output_assemble(dc, loop, scalers = None,  lb = None, k = 5):
-    box = dc.vector()[:].copy()
+def output_assemble(dc, loop, F, scalers = None,  lb = None, k = 5):
+    # box = copy(dc.vector()[:])
+    # if lb is None:
+    #     q1, q3 = np.percentile(box, [25, 75])
+    #     iqr = q3 - q1
+    #     lb = q1 - k*iqr
+    # box[box < lb] = box[box >= lb].min()
+    # if scalers is None:
+    #     scalers = MinMaxScaler(feature_range=(-1,0))
+    #     scalers.fit(box.reshape(-1,1))
+    # box = scalers.transform(box.reshape(-1,1))
+    # dc.vector()[:] = box.ravel()
+    # return dc.vector()[:].reshape(-1,1), scalers, lb
+    box = adj.Function(F)
+    box.assign(dc)
+
     if lb is None:
-        q1, q3 = np.percentile(box, [25, 75])
+        q1, q3 = np.percentile(box.vector()[:], [25, 75])
         iqr = q3 - q1
         lb = q1 - k*iqr
-    box[box < lb] = box[box >= lb].min()
+    box.vector()[box.vector()[:]<lb]=box.vector()[box.vector()[:]>=lb].min()  ### outlier
+
     if scalers is None:
         scalers = MinMaxScaler(feature_range=(-1,0))
-        scalers.fit(box.reshape(-1,1))
-    box = scalers.transform(box.reshape(-1,1))
-    dc.vector()[:] = box.ravel()
-    return dc.vector()[:].reshape(-1,1), scalers, lb
+        scalers.fit(box.vector()[:].reshape(-1,1))
+    q = scalers.transform(box.vector()[:].reshape(-1,1)) ###normalize
+    return q, scalers, lb
+
 
 def oc(density,dc,dv,mesh,H,Hs,volfrac,areas):
     l1 = 0
